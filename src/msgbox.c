@@ -99,19 +99,19 @@ static void init_if_needed() {
 }
 
 static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data) {
-  printf("%s: event=%d.\n", __func__, event);
+  //printf("%s: event=%d.\n", __func__, event);
   PendingCallback pending_callback = {conn, event, data, NULL};
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
 static void send_callback_error(msg_Conn *conn, const char *msg) {
-  printf("%s: %s.\n", __func__, msg);
+  //printf("%s: %s.\n", __func__, msg);
   PendingCallback pending_callback = {conn, msg_Error, msg_new_data(msg), NULL};
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
 static void send_callback_os_error(msg_Conn *conn, const char *msg) {
-  printf("%s: %s.\n", __func__, msg);
+  //printf("%s: %s.\n", __func__, msg);
   static char err_msg[1024];
   snprintf(err_msg, 1024, "%s: %s", msg, strerror(errno));
   send_callback_error(conn, err_msg);
@@ -215,15 +215,15 @@ static int read_header(int sock, msg_Conn *conn, int *num_packets, int *packet_i
 }
 
 static void read_from_socket(int sock, msg_Conn *conn) {
-  printf("%s(%d, %p)\n", __func__, sock, conn);
+  //printf("%s(%d, %p)\n", __func__, sock, conn);
   int num_packets, packet_id;
   if (!read_header(sock, conn, &num_packets, &packet_id)) return;
-  printf("reply_id(raw)=%d num_packets=%d packet_id=%d.\n", conn->reply_id, num_packets, packet_id);
+  //printf("reply_id(raw)=%d num_packets=%d packet_id=%d.\n", conn->reply_id, num_packets, packet_id);
 
   int is_reply = !!(conn->reply_id & is_reply_mask);
   conn->reply_id &= !is_reply_mask;  // Ensure the is_reply bit is off.
 
-  printf("reply_id=%d is_reply=%d.\n", conn->reply_id, is_reply);
+  //printf("reply_id=%d is_reply=%d.\n", conn->reply_id, is_reply);
 
   msg_Event event = msg_Message;
   if (conn->reply_id) event = is_reply ? msg_Reply : msg_Request;
@@ -260,11 +260,11 @@ void msg_runloop() {
   // TEMP
   static int num_prints = 0;
   if (num_prints < 3) {
-    printf("About to call poll.\n");
-    printf("num_fds=%d\n", num_fds);
+    //printf("About to call poll.\n");
+    //printf("num_fds=%d\n", num_fds);
     if (num_fds > 0) {
       struct pollfd *pfd = (struct pollfd *)poll_fds->elements;
-      printf("first fd=%d\n", pfd->fd);
+      //printf("first fd=%d\n", pfd->fd);
     }
     num_prints++;
   }
@@ -366,7 +366,7 @@ void msg_listen(const char *address, void *conn_context, msg_Callback callback) 
 }
 
 void msg_connect(const char *address, void *conn_context, msg_Callback callback) {
-  printf("%s\n", __func__);
+  //printf("%s\n", __func__);
   init_if_needed();
 
   // TODO refactor stuff that's in common with msg_listen
@@ -403,7 +403,7 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
   // TODO make sure conn is cleaned up properly here; also in the same spot in msg_listen
   if (err_msg != no_error) return send_callback_error(conn, err_msg);
 
-  printf("port=%d ip_str=%s\n", port, ip_str);
+  //printf("port=%d ip_str=%s\n", port, ip_str);
 
   memset(sockaddr, 0, sockaddr_size);
   sockaddr->sin_family = AF_INET;
@@ -428,7 +428,7 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
     return;
   }
 
-  printf("About to request a msg_ConnectionReady callback.\n");
+  //printf("About to request a msg_ConnectionReady callback.\n");
   send_callback(conn, msg_ConnectionReady, msg_no_data);
 }
 
@@ -436,7 +436,7 @@ void msg_disconnect(msg_Conn *conn) {
 }
 
 void msg_send(msg_Conn *conn, msg_Data data) {
-  printf("%s: '%s'\n", __func__, msg_as_str(data));
+  //printf("%s: '%s'\n", __func__, msg_as_str(data));
 
   // Set up the header.
   Header *header = (Header *)(data.bytes - header_len);
@@ -446,16 +446,16 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   // packet_id is ignored for one-packet messages.
 
   int default_options = 0;
-  printf("protocol_type=%d for_listening=%d.\n", conn->protocol_type, conn->for_listening);
+  //printf("protocol_type=%d for_listening=%d.\n", conn->protocol_type, conn->for_listening);
   if (conn->protocol_type == msg_udp && conn->for_listening) {
-    printf("Using sendto.\n");
+    //printf("Using sendto.\n");
     struct sockaddr_in sockaddr;
     char *err_msg = setup_sockaddr(&sockaddr, conn->remote_address, conn->remote_port);
     if (err_msg) return send_callback_error(conn, err_msg);
     sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_in));
   } else {
-    printf("Using send.\n");
+    //printf("Using send.\n");
     send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
   }
 }

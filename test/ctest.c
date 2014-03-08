@@ -23,6 +23,7 @@ static char *test_name;  // A program may run multiple tests.
 static char log[LOG_SIZE];
 static char *log_cursor;
 static char *log_end;
+static int log_is_verbose = 0;
 
 ////////////////////////////////////////////////////////
 // Static (internal) function definitions.
@@ -46,7 +47,11 @@ static void handle_seg_fault(int sig) {
 void start_all_tests(char *name) {
   program_name = basename(name);
   printf("%s - running ", program_name);
-  fflush(stdout);
+  if (log_is_verbose) {
+    printf("\n");
+  } else {
+    fflush(stdout);
+  }
   signal(SIGSEGV, handle_seg_fault);
   log_end = log + LOG_SIZE;
 }
@@ -79,19 +84,30 @@ void run_tests_(char *test_names, ...) {
 }
 
 int test_printf_(const char *format, ...) {
-  static char buffer[LOG_SIZE];
+  int chars_printed;
   va_list args;
-  va_start(args, format);
-  vsnprintf(buffer, LOG_SIZE, format, args);
-  va_end(args);
 
-  // The -1 makes room for the null terminator.
-  size_t size_left = log_end - log_cursor - 1;
-  char *new_cursor = log + strlcat(log_cursor, buffer, size_left);
-  int chars_added = new_cursor - log_cursor;
-  log_cursor = new_cursor;
+  if (log_is_verbose) {
 
-  return chars_added;
+    va_start(args, format);
+    chars_printed = vprintf(format, args);
+    va_end(args);
+
+  } else {
+
+    static char buffer[LOG_SIZE];
+    va_start(args, format);
+    vsnprintf(buffer, LOG_SIZE, format, args);
+    va_end(args);
+
+    // The -1 makes room for the null terminator.
+    size_t size_left = log_end - log_cursor - 1;
+    char *new_cursor = log + strlcat(log_cursor, buffer, size_left);
+    chars_printed = new_cursor - log_cursor;
+    log_cursor = new_cursor;
+  }
+
+  return chars_printed;
 }
 
 void test_that_(int cond, char *cond_str, char *filename, int line_number) {
@@ -102,10 +118,16 @@ void test_that_(int cond, char *cond_str, char *filename, int line_number) {
 }
 
 void test_failed() {
-  printf("\r%s - failed \n", program_name);
-  printf("Failed in test '%s'; log follows:\n---\n", test_name);
-  printf("%s\n---\n", log);
+  if (!log_is_verbose) {
+    // If log_is_verbose, then the log is already printed out by now.
+    printf("\r%s - failed \n", program_name);
+    printf("Failed in test '%s'; log follows:\n---\n", test_name);
+    printf("%s\n---\n", log);
+  }
   printf("%s failed while running test %s.\n", program_name, test_name);
-  exit(1);
+  exit(test_failure);
 }
 
+void set_verbose(int be_verbose) {
+  log_is_verbose = be_verbose;
+}
