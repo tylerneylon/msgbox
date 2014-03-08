@@ -50,7 +50,8 @@ void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 int udp_server() {
 
   msg_listen("udp://*:1234", msg_no_context, udp_server_update);
-  while (!server_done) msg_runloop();
+  int timeout_in_ms = 10;
+  while (!server_done) msg_runloop(timeout_in_ms);
 
   return test_success;
 }
@@ -90,7 +91,8 @@ int udp_client() {
   usleep(1000);
 
   msg_connect("udp://127.0.0.1:1234", msg_no_context, udp_client_update);
-  while (!client_done) msg_runloop();
+  int timeout_in_ms = 10;
+  while (!client_done) msg_runloop(timeout_in_ms);
 
   return test_success;
 }

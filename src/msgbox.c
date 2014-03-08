@@ -208,9 +208,9 @@ static int read_header(int sock, msg_Conn *conn, int *num_packets, int *packet_i
     send_callback_os_error(conn, "recv");
     return false;
   }
-  conn->reply_id = buffer[0];
-  *num_packets = buffer[1];
-  *packet_id = buffer[2];
+  conn->reply_id = ntohs(buffer[0]);
+  *num_packets = ntohs(buffer[1]);
+  *packet_id = ntohs(buffer[2]);
   return true;
 }
 
@@ -253,9 +253,8 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 ///////////////////////////////////////////////////////////////////////////////
 //  Public functions.
 
-void msg_runloop() {
+void msg_runloop(int timeout_in_ms) {
   nfds_t num_fds = poll_fds->count;
-  int nonblocking_timeout = 0;
 
   // TEMP
   static int num_prints = 0;
@@ -269,7 +268,7 @@ void msg_runloop() {
     num_prints++;
   }
 
-  int ret = poll((struct pollfd *)poll_fds->elements, num_fds, nonblocking_timeout);
+  int ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
 
   if (ret == -1) {
     // It's difficult to send a standard error callback to the user here because
@@ -439,10 +438,11 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   //printf("%s: '%s'\n", __func__, msg_as_str(data));
 
   // Set up the header.
+  // TODO Encapsulate header setup in a function.
   Header *header = (Header *)(data.bytes - header_len);
-  header->reply_id = one_way_msg;
+  header->reply_id = htons(one_way_msg);
   // TODO Be able to handle multi-packet data.
-  header->num_packets = 1;
+  header->num_packets = htons(1);
   // packet_id is ignored for one-packet messages.
 
   int default_options = 0;

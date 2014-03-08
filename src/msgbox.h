@@ -60,8 +60,7 @@ typedef struct msg_Conn {
 
 // Event loop function; expects to be called frequently.
 
-// TODO add a timeout parameter
-void msg_runloop();
+void msg_runloop(int timeout_in_ms);
 
 // Calls to start or stop a client or server.
 
