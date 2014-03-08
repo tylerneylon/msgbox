@@ -106,7 +106,7 @@ static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data) {
 
 static void send_callback_error(msg_Conn *conn, const char *msg) {
   //printf("%s: %s.\n", __func__, msg);
-  PendingCallback pending_callback = {conn, msg_Error, msg_new_data(msg), NULL};
+  PendingCallback pending_callback = {conn, msg_error, msg_new_data(msg), NULL};
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
@@ -225,8 +225,8 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
   //printf("reply_id=%d is_reply=%d.\n", conn->reply_id, is_reply);
 
-  msg_Event event = msg_Message;
-  if (conn->reply_id) event = is_reply ? msg_Reply : msg_Request;
+  msg_Event event = msg_message;
+  if (conn->reply_id) event = is_reply ? msg_reply : msg_request;
 
   if (num_packets == 1) {
     char *buffer = malloc(recv_buffer_len);
@@ -325,7 +325,7 @@ void msg_listen(const char *address, void *conn_context, msg_Callback callback) 
   if (sock == -1) {
     static char err_msg[1024];
     snprintf(err_msg, 1024, "socket: %s", strerror(errno));
-    PendingCallback pending_callback = {conn, msg_Error, msg_new_data(err_msg), conn};
+    PendingCallback pending_callback = {conn, msg_error, msg_new_data(err_msg), conn};
     CArrayAddElement(immediate_callbacks, pending_callback);
     return;
   }
@@ -362,7 +362,7 @@ void msg_listen(const char *address, void *conn_context, msg_Callback callback) 
   int ret_val = bind(sock, (struct sockaddr *)sockaddr, sockaddr_size);
   if (ret_val == -1) return send_callback_os_error(conn, "bind");
 
-  send_callback(conn, msg_Listening, msg_no_data);
+  send_callback(conn, msg_listening, msg_no_data);
 }
 
 void msg_connect(const char *address, void *conn_context, msg_Callback callback) {
@@ -379,7 +379,7 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
   if (sock == -1) {
     static char err_msg[1024];
     snprintf(err_msg, 1024, "socket: %s", strerror(errno));
-    PendingCallback pending_callback = {conn, msg_Error, msg_new_data(err_msg), conn};
+    PendingCallback pending_callback = {conn, msg_error, msg_new_data(err_msg), conn};
     CArrayAddElement(immediate_callbacks, pending_callback);
     return;
   }
@@ -423,13 +423,13 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
     static char err_msg[1024];
     snprintf(err_msg, 1024, "connect: %s", strerror(errno));
     CArrayRemoveElement(conns, CArrayElement(conns, conns->count - 1));
-    PendingCallback pending_callback = {conn, msg_Error, msg_new_data(err_msg), conn};
+    PendingCallback pending_callback = {conn, msg_error, msg_new_data(err_msg), conn};
     CArrayAddElement(immediate_callbacks, pending_callback);
     return;
   }
 
   //printf("About to request a msg_ConnectionReady callback.\n");
-  send_callback(conn, msg_ConnectionReady, msg_no_data);
+  send_callback(conn, msg_connection_ready, msg_no_data);
 }
 
 void msg_disconnect(msg_Conn *conn) {
@@ -529,7 +529,7 @@ void msg_update(msg_Conn *conn, msg_Event event, msg_Data data) {
       printf("Reply: Echoing a message back to %s.\n", conn->remote_address);
       msg_send(conn, data);
       break;
-    case msg_Error:
+    case msg_error:
       printf("Error: %s\n", msg_error_str(data));
       break;
   }

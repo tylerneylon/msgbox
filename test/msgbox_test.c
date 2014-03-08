@@ -26,13 +26,13 @@ int server_done = 0;
 void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   static int event_num = 1;
   // We expect to hear events in this order:
-  // msg_Listening, msg_Message
+  // msg_listening, msg_message
   switch(event) {
-    case msg_Listening:
+    case msg_listening:
       test_printf("%s: Listening.\n", __func__);
       test_that(event_num == 1);
       break;
-    case msg_Message:
+    case msg_message:
       test_printf("Message: Echoing a message back to %s:%d.\n",
           conn->remote_address, conn->remote_port);
       test_printf("The message is '%s'.\n", msg_as_str(data));
@@ -67,12 +67,12 @@ void udp_client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   // We expect to hear events in this order:
   // msg_ConnectionReady, msg_Message
   switch(event) {
-    case msg_ConnectionReady:
+    case msg_connection_ready:
       test_printf("Connection ready with %s.\n", conn->remote_address);
       test_that(event_num == 1);
       msg_send(conn, msg_new_data("hello msgbox!"));
       break;
-    case msg_Message:
+    case msg_message:
       test_printf("Message from %s:%d.\n", conn->remote_address, conn->remote_port);
       test_printf("The message is '%s'.\n", msg_as_str(data));
       test_that(event_num == 2);

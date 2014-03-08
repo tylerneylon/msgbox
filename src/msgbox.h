@@ -30,14 +30,14 @@ typedef struct {
 // TODO Consider renaming this to be consistent with the convention that
 // types are camel case and everything else uses underscores.
 typedef enum {
-  msg_Message,
-  msg_Request,
-  msg_Reply,
-  msg_Listening,
-  msg_ConnectionReady,
-  msg_ConnectionClosed,
-  msg_ConnectionLost,
-  msg_Error
+  msg_message,
+  msg_request,
+  msg_reply,
+  msg_listening,
+  msg_connection_ready,
+  msg_connection_closed,
+  msg_connection_lost,
+  msg_error
 } msg_Event;
 
 struct msg_Conn;
