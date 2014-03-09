@@ -90,6 +90,15 @@ static const uint16_t max_reply_id = (1 << 15) - 1;  // = bits:01..1 with 15 one
 ///////////////////////////////////////////////////////////////////////////////
 //  Internal functions.
 
+void CArrayRemoveLast(CArray array) {
+  CArrayRemoveElement(array, CArrayElement(array, array->count - 1));
+}
+
+void remove_last_polling_conn() {
+  CArrayRemoveLast(conns);
+  CArrayRemoveLast(poll_fds);
+}
+
 static void init_if_needed() {
   if (init_done) return;
 
@@ -106,17 +115,17 @@ static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data) {
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
-static void send_callback_error(msg_Conn *conn, const char *msg) {
+static void send_callback_error(msg_Conn *conn, const char *msg, void *to_free) {
   //printf("%s: %s.\n", __func__, msg);
-  PendingCallback pending_callback = {conn, msg_error, msg_new_data(msg), NULL};
+  PendingCallback pending_callback = {conn, msg_error, msg_new_data(msg), to_free};
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
-static void send_callback_os_error(msg_Conn *conn, const char *msg) {
+static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_free) {
   //printf("%s: %s.\n", __func__, msg);
   static char err_msg[1024];
   snprintf(err_msg, 1024, "%s: %s", msg, strerror(errno));
-  send_callback_error(conn, err_msg);
+  send_callback_error(conn, err_msg, to_free);
 }
 
 // TODO Use this function as much as possible.
@@ -200,7 +209,7 @@ static int read_header(int sock, msg_Conn *conn, int *num_packets, int *packet_i
   static uint16_t buffer[(header_len / sizeof(uint16_t))];
   ssize_t bytes_recvd = recv(sock, buffer, header_len, MSG_PEEK);
   if (bytes_recvd == -1) {
-    send_callback_os_error(conn, "recv");
+    send_callback_os_error(conn, "recv", NULL);
     return false;
   }
   conn->reply_id = ntohs(buffer[0]);
@@ -231,7 +240,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     ssize_t bytes_recvd = recvfrom(sock, buffer, recv_buffer_len, default_options,
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
-    if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom");
+    if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
 
     msg_Data data = {bytes_recvd - header_len, buffer + header_len};
     strcpy(conn->remote_address, inet_ntoa(remote_sockaddr.sin_addr));
@@ -308,18 +317,16 @@ void msg_runloop(int timeout_in_ms) {
   CArrayDelete(saved_immediate_callbacks);
 }
 
+// TODO make internal
 // Sets up sockaddr based on address. If an error occurs, the error callback
-// is scheduled.  The return value is truthy on success.
-
-struct sockaddr_in *new_sockaddr(const char *address, msg_Conn *conn) {
+// is scheduled.  Returns true on success.
+// conn and its polling fd are added the polling conns arrays on success.
+static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg_Conn *conn) {
   int use_default_protocol = 0;
   int sock = socket(AF_INET, SOCK_DGRAM, use_default_protocol);
   if (sock == -1) {
-    static char err_msg[1024];
-    snprintf(err_msg, 1024, "socket: %s", strerror(errno));
-    PendingCallback pending_callback = {conn, msg_error, msg_new_data(err_msg), conn};
-    CArrayAddElement(immediate_callbacks, pending_callback);
-    return NULL;
+    send_callback_os_error(conn, "socket", conn);
+    return false;
   }
 
   // We have a real socket, so add entries to both poll_fds and conns.
@@ -331,52 +338,42 @@ struct sockaddr_in *new_sockaddr(const char *address, msg_Conn *conn) {
   poll_fd->events = POLLIN;
 
   const char *err_msg = parse_address_str(address, conn);
-  // TODO make sure conn is cleaned up properly here; also in the same spot in msg_listen
   if (err_msg != no_error) {
-    send_callback_error(conn, err_msg);
-    return NULL;
+    remove_last_polling_conn();
+    send_callback_error(conn, err_msg, conn);
+    return false;
   }
 
-  //printf("port=%d ip_str=%s\n", port, ip_str);
-
   // Set up the sockaddr_in struct.
-  struct sockaddr_in *sockaddr = (struct sockaddr_in *)malloc(sock_in_size);
   memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
   if (strcmp(conn->remote_address, "*") == 0) {
     sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
   } else if (inet_aton(conn->remote_address, &sockaddr->sin_addr) == 0) {
-    // TODO make sure conn is cleaned up properly
+    remove_last_polling_conn();
     static char err_msg[1024];
     snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_address);
-    send_callback_error(conn, err_msg);
-    free(sockaddr);
-    return NULL;
+    send_callback_error(conn, err_msg, conn);
+    return false;
   }
 
-  return sockaddr;
+  return true;
 }
 
+// TODO refactor even further
 void msg_listen(const char *address, void *conn_context, msg_Callback callback) {
   init_if_needed();
 
   msg_Conn *conn = new_connection(conn_context, callback);
   conn->for_listening = true;
-  struct sockaddr_in *sockaddr = new_sockaddr(address, conn);
-  if (sockaddr == NULL) return;  // There was an error.
+  struct sockaddr_in *sockaddr = alloca(sock_in_size);
+  if (!setup_sockaddr(sockaddr, address, conn)) return;  // There was an error.
 
-  // TODO Clean up this along with the corresponding part in msg_connect.
   int ret_val = bind(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
-  int err = errno;  // Save to avoid error conflict when calling free.
-  free(sockaddr);
   if (ret_val == -1) {
-    static char err_msg[1024];
-    snprintf(err_msg, 1024, "bind: %s", strerror(err));
-    CArrayRemoveElement(conns, CArrayElement(conns, conns->count - 1));
-    PendingCallback pending_callback = {conn, msg_error, msg_new_data(err_msg), conn};
-    CArrayAddElement(immediate_callbacks, pending_callback);
-    return;
+    send_callback_os_error(conn, "bind", conn);
+    return remove_last_polling_conn();
   }
 
   send_callback(conn, msg_listening, msg_no_data);
@@ -386,19 +383,13 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
   init_if_needed();
   
   msg_Conn *conn = new_connection(conn_context, callback);
-  struct sockaddr_in *sockaddr = new_sockaddr(address, conn);
-  if (sockaddr == NULL) return;  // There was an error.
+  struct sockaddr_in *sockaddr = alloca(sock_in_size);
+  if (!setup_sockaddr(sockaddr, address, conn)) return;  // There was an error.
   
   int ret_val = connect(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
-  int err = errno;  // Save to avoid error conflict when calling free.
-  free(sockaddr);
   if (ret_val == -1) {
-    static char err_msg[1024];
-    snprintf(err_msg, 1024, "connect: %s", strerror(err));
-    CArrayRemoveElement(conns, CArrayElement(conns, conns->count - 1));
-    PendingCallback pending_callback = {conn, msg_error, msg_new_data(err_msg), conn};
-    CArrayAddElement(immediate_callbacks, pending_callback);
-    return;
+    send_callback_os_error(conn, "connect", conn);
+    return remove_last_polling_conn();
   }
 
   send_callback(conn, msg_connection_ready, msg_no_data);
@@ -424,7 +415,7 @@ void msg_send(msg_Conn *conn, msg_Data data) {
     //printf("Using sendto.\n");
     struct sockaddr_in sockaddr;
     char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
-    if (err_msg) return send_callback_error(conn, err_msg);
+    if (err_msg) return send_callback_error(conn, err_msg, NULL);
     sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_in));
   } else {
