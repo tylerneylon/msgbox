@@ -244,6 +244,12 @@ static void read_from_socket(int sock, msg_Conn *conn) {
   }
 }
 
+static void setup_connection(msg_Conn *conn, void *conn_context, msg_Callback callback) {
+  memset(conn, 0, sizeof(msg_Conn));
+  conn->conn_context = conn_context;
+  conn->callback = callback;
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Public functions.
@@ -298,13 +304,6 @@ void msg_runloop(int timeout_in_ms) {
   // TODO handle any timed callbacks
 
   CArrayDelete(saved_immediate_callbacks);
-}
-
-// TODO move this to the internal function area
-static void setup_connection(msg_Conn *conn, void *conn_context, msg_Callback callback) {
-  memset(conn, 0, sizeof(msg_Conn));
-  conn->conn_context = conn_context;
-  conn->callback = callback;
 }
 
 void msg_listen(const char *address, void *conn_context, msg_Callback callback) {
