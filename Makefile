@@ -16,7 +16,9 @@
 
 # Target lists.
 tests = out/msgbox_test
-obj = $(addprefix out/,msgbox.o CArray.o memprofile.o ctest.o)
+common_obj = $(addprefix out/,CArray.o memprofile.o)
+release_obj = out/msgbox.o $(common_obj)
+test_obj = out/msgbox_debug.o out/ctest.o $(common_obj)
 examples =
 
 # Variables for build settings.
@@ -31,7 +33,7 @@ testenv = DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib MALLOC_LOG_FILE=/dev/n
 # Primary rules; meant to be used directly.
 
 # Build everything.
-all: $(obj) $(tests) $(examples)
+all: $(release_obj) $(tests) $(examples)
 
 # Build all tests.
 test: $(tests)
@@ -50,18 +52,19 @@ clean:
 #################################################################################
 # Internal rules; meant to only be used indirectly by the above rules.
 
-test-build: $(tests)
-
 out:
 	mkdir -p out
 
 out/ctest.o: test/ctest.c test/ctest.h | out
 	$(cc) -o out/ctest.o -c test/ctest.c
 
+out/msgbox_debug.o: src/msgbox.h src/msgbox.c | out
+	$(cc) -o out/msgbox_debug.o -c src/msgbox.c -DDEBUG
+
 out/%.o : src/%.c src/%.h | out
 	$(cc) -o $@ -c $<
 
-$(tests) : out/% : test/%.c $(obj)
+$(tests) : out/% : test/%.c $(test_obj)
 	$(cc) -o $@ $^
 
 $(examples) : out/% : examples/%.c $(obj)

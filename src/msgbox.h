@@ -64,7 +64,7 @@ void msg_runloop(int timeout_in_ms);
 
 void msg_listen(const char *address, void *conn_context, msg_Callback callback);
 void msg_connect(const char *address, void *conn_context, msg_Callback callback);
-void msg_disconnect(msg_Conn *conn);
+void msg_close(msg_Conn *conn);
 
 // Calls to send a message. Call get when you expect a reply; otherwise call send.
 

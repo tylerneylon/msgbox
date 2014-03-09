@@ -21,9 +21,6 @@
 // Make it possible to turn on and off the assert macro based
 // on the DEBUG preprocessor definition.
 
-// TODO TEMP
-#define DEBUG
-
 #ifdef DEBUG
 #include <assert.h>
 #else
@@ -414,7 +411,14 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
   open_socket(address, conn_context, callback, for_listening);
 }
 
-void msg_disconnect(msg_Conn *conn) {
+void msg_close(msg_Conn *conn) {
+  msg_Data data = msg_new_data_space(0);
+  int num_packets = 1, packet_id = 0, reply_id = 0;
+  set_header(data, close, num_packets, packet_id, reply_id);
+
+  int default_options = 0;
+  send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
+  // TODO When is this data freed?
 }
 
 void msg_send(msg_Conn *conn, msg_Data data) {
