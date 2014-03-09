@@ -121,10 +121,11 @@ static void send_callback_os_error(msg_Conn *conn, const char *msg) {
 
 // TODO Use this function as much as possible.
 // Returns no_error (NULL) on success; otherwise an error string.
-static char *setup_sockaddr(struct sockaddr_in *sockaddr, char *ip_str, uint16_t port) {
+static char *setup_sockaddr(struct sockaddr_in *sockaddr, msg_Conn *conn) {
   memset(sockaddr, 0, sizeof(struct sockaddr_in));
   sockaddr->sin_family = AF_INET;
-  sockaddr->sin_port = htons(port);
+  sockaddr->sin_port = htons(conn->remote_port);
+  char *ip_str = conn->remote_address;
   if (strcmp(ip_str, "*") == 0) {
     sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
   } else if (inet_aton(ip_str, &sockaddr->sin_addr) == 0) {
@@ -135,30 +136,24 @@ static char *setup_sockaddr(struct sockaddr_in *sockaddr, char *ip_str, uint16_t
   return no_error;
 }
 
-// Returns no_error (NULL) on success; the memory at ip_str is assumed to have at
-// least 16 bytes available where the ip portion of the address will be written.
+// Returns no_error (NULL) on success, and sets the protocol_type,
+// remote_address, and remote_port of the given conn.
 // Returns an error string if there was an error.
-static const char *parse_address_str(const char *address, int *protocol_type, char *ip_str, uint16_t *port) {
-  assert(protocol_type != NULL);
-  assert(ip_str != NULL);
-  assert(port != NULL);
+static const char *parse_address_str(const char *address, msg_Conn *conn) {
+  assert(conn != NULL);
   static char err_msg[1024];
 
   // TODO once v1 functionality is done, see if I can
-  // encapsulate this pattern into a one-liner; eg with a macro.
-  if (address == NULL) {
-    snprintf(err_msg, 1024, "Failing due to NULL address");
-    return err_msg;
-  }
+  // encapsulate the error pattern into a one-liner; eg with a macro.
 
   // Parse the protocol type; either tcp or udp.
   const char *tcp_prefix = "tcp://";
   const char *udp_prefix = "udp://";
   size_t prefix_len = 6;
   if (strncmp(address, tcp_prefix, prefix_len) == 0) {
-    *protocol_type = SOCK_STREAM;
+    conn->protocol_type = SOCK_STREAM;
   } else if (strncmp(address, udp_prefix, prefix_len) == 0) {
-    *protocol_type = SOCK_DGRAM;
+    conn->protocol_type = SOCK_DGRAM;
   } else {
     // address has no recognizable prefix.
     snprintf(err_msg, 1024, "Failing due to unrecognized prefix: %s", address);
@@ -180,7 +175,7 @@ static const char *parse_address_str(const char *address, int *protocol_type, ch
         ip_len, address);
     return err_msg;
   }
-  char *ip_str_end = stpncpy(ip_str, ip_start, ip_len);
+  char *ip_str_end = stpncpy(conn->remote_address, ip_start, ip_len);
   *ip_str_end = '\0';
 
   // Parse the port.
@@ -190,7 +185,7 @@ static const char *parse_address_str(const char *address, int *protocol_type, ch
     snprintf(err_msg, 1024, "Empty port string in address '%s'", address);
     return err_msg;
   }
-  *port = (int)strtol(colon + 1, &end_ptr, base_ten);
+  conn->remote_port = (int)strtol(colon + 1, &end_ptr, base_ten);
   if (*end_ptr != '\0') {
     snprintf(err_msg, 1024, "Invalid port string in address '%s'", address);
     return err_msg;
@@ -341,16 +336,14 @@ void msg_listen(const char *address, void *conn_context, msg_Callback callback) 
   // Set up the sockaddr_in struct.
   size_t sockaddr_size = sizeof(struct sockaddr_in);
   struct sockaddr_in *sockaddr = alloca(sockaddr_size);
-  uint16_t port;
-  char ip_str[16];
-  const char *err_msg = parse_address_str(address, &conn->protocol_type, ip_str, &port);
+  const char *err_msg = parse_address_str(address, conn);
   if (err_msg != no_error) return send_callback_error(conn, err_msg);
 
   memset(sockaddr, 0, sockaddr_size);
   sockaddr->sin_family = AF_INET;
-  sockaddr->sin_port = htons(port);
+  sockaddr->sin_port = htons(conn->remote_port);
 
-  if (strcmp(ip_str, "*") == 0) {
+  if (strcmp(conn->remote_address, "*") == 0) {
     sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
   } else {
     // TODO Listening on a specific interface is not yet implemented.
@@ -395,10 +388,7 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
   // Set up the sockaddr_in struct.
   size_t sockaddr_size = sizeof(struct sockaddr_in);
   struct sockaddr_in *sockaddr = alloca(sockaddr_size);
-  int protocol_type;
-  uint16_t port;
-  char ip_str[16];
-  const char *err_msg = parse_address_str(address, &protocol_type, ip_str, &port);
+  const char *err_msg = parse_address_str(address, conn);
   // TODO make sure conn is cleaned up properly here; also in the same spot in msg_listen
   if (err_msg != no_error) return send_callback_error(conn, err_msg);
 
@@ -406,16 +396,14 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
 
   memset(sockaddr, 0, sockaddr_size);
   sockaddr->sin_family = AF_INET;
-  sockaddr->sin_port = htons(port);
-  if (inet_aton(ip_str, &sockaddr->sin_addr) == 0) {
+  sockaddr->sin_port = htons(conn->remote_port);
+  if (inet_aton(conn->remote_address, &sockaddr->sin_addr) == 0) {
     // TODO make sure conn is cleaned up properly
     static char err_msg[1024];
-    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", ip_str);
+    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_address);
     send_callback_error(conn, err_msg);
     return;
   }
-  strcpy(conn->remote_address, ip_str);
-  conn->remote_port = port;
 
   int ret_val = connect(sock, (struct sockaddr *)sockaddr, sockaddr_size);
   if (ret_val == -1) {
@@ -450,7 +438,7 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   if (conn->protocol_type == msg_udp && conn->for_listening) {
     //printf("Using sendto.\n");
     struct sockaddr_in sockaddr;
-    char *err_msg = setup_sockaddr(&sockaddr, conn->remote_address, conn->remote_port);
+    char *err_msg = setup_sockaddr(&sockaddr, conn);
     if (err_msg) return send_callback_error(conn, err_msg);
     sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_in));
