@@ -261,6 +261,71 @@ static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
   return conn;
 }
 
+// Sets up sockaddr based on address. If an error occurs, the error callback
+// is scheduled.  Returns true on success.
+// conn and its polling fd are added the polling conns arrays on success.
+static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg_Conn *conn) {
+  int use_default_protocol = 0;
+  int sock = socket(AF_INET, SOCK_DGRAM, use_default_protocol);
+  if (sock == -1) {
+    send_callback_os_error(conn, "socket", conn);
+    return false;
+  }
+
+  // We have a real socket, so add entries to both poll_fds and conns.
+  conn->socket = sock;
+  CArrayAddElement(conns, conn);
+
+  struct pollfd *poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
+  poll_fd->fd = sock;
+  poll_fd->events = POLLIN;
+
+  const char *err_msg = parse_address_str(address, conn);
+  if (err_msg != no_error) {
+    remove_last_polling_conn();
+    send_callback_error(conn, err_msg, conn);
+    return false;
+  }
+
+  // Set up the sockaddr_in struct.
+  memset(sockaddr, 0, sock_in_size);
+  sockaddr->sin_family = AF_INET;
+  sockaddr->sin_port = htons(conn->remote_port);
+  if (strcmp(conn->remote_address, "*") == 0) {
+    sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
+  } else if (inet_aton(conn->remote_address, &sockaddr->sin_addr) == 0) {
+    remove_last_polling_conn();
+    static char err_msg[1024];
+    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_address);
+    send_callback_error(conn, err_msg, conn);
+    return false;
+  }
+
+  return true;
+}
+
+typedef int (*SocketOpener)(int, const struct sockaddr *, socklen_t);
+
+static void open_socket(const char *address, void *conn_context,
+    msg_Callback callback, int for_listening) {
+  init_if_needed();
+
+  msg_Conn *conn = new_connection(conn_context, callback);
+  conn->for_listening = for_listening;
+  struct sockaddr_in *sockaddr = alloca(sock_in_size);
+  if (!setup_sockaddr(sockaddr, address, conn)) return;  // There was an error.
+
+  SocketOpener sys_open_sock = for_listening ? bind : connect;
+  int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
+  if (ret_val == -1) {
+    send_callback_os_error(conn, "bind", conn);
+    return remove_last_polling_conn();
+  }
+
+  msg_Event event = for_listening ? msg_listening : msg_connection_ready;
+  send_callback(conn, event, msg_no_data);
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Public functions.
@@ -317,82 +382,14 @@ void msg_runloop(int timeout_in_ms) {
   CArrayDelete(saved_immediate_callbacks);
 }
 
-// TODO make internal
-// Sets up sockaddr based on address. If an error occurs, the error callback
-// is scheduled.  Returns true on success.
-// conn and its polling fd are added the polling conns arrays on success.
-static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg_Conn *conn) {
-  int use_default_protocol = 0;
-  int sock = socket(AF_INET, SOCK_DGRAM, use_default_protocol);
-  if (sock == -1) {
-    send_callback_os_error(conn, "socket", conn);
-    return false;
-  }
-
-  // We have a real socket, so add entries to both poll_fds and conns.
-  conn->socket = sock;
-  CArrayAddElement(conns, conn);
-
-  struct pollfd *poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
-  poll_fd->fd = sock;
-  poll_fd->events = POLLIN;
-
-  const char *err_msg = parse_address_str(address, conn);
-  if (err_msg != no_error) {
-    remove_last_polling_conn();
-    send_callback_error(conn, err_msg, conn);
-    return false;
-  }
-
-  // Set up the sockaddr_in struct.
-  memset(sockaddr, 0, sock_in_size);
-  sockaddr->sin_family = AF_INET;
-  sockaddr->sin_port = htons(conn->remote_port);
-  if (strcmp(conn->remote_address, "*") == 0) {
-    sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
-  } else if (inet_aton(conn->remote_address, &sockaddr->sin_addr) == 0) {
-    remove_last_polling_conn();
-    static char err_msg[1024];
-    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_address);
-    send_callback_error(conn, err_msg, conn);
-    return false;
-  }
-
-  return true;
-}
-
-// TODO refactor even further
 void msg_listen(const char *address, void *conn_context, msg_Callback callback) {
-  init_if_needed();
-
-  msg_Conn *conn = new_connection(conn_context, callback);
-  conn->for_listening = true;
-  struct sockaddr_in *sockaddr = alloca(sock_in_size);
-  if (!setup_sockaddr(sockaddr, address, conn)) return;  // There was an error.
-
-  int ret_val = bind(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
-  if (ret_val == -1) {
-    send_callback_os_error(conn, "bind", conn);
-    return remove_last_polling_conn();
-  }
-
-  send_callback(conn, msg_listening, msg_no_data);
+  int for_listening = true;
+  open_socket(address, conn_context, callback, for_listening);
 }
 
 void msg_connect(const char *address, void *conn_context, msg_Callback callback) {
-  init_if_needed();
-  
-  msg_Conn *conn = new_connection(conn_context, callback);
-  struct sockaddr_in *sockaddr = alloca(sock_in_size);
-  if (!setup_sockaddr(sockaddr, address, conn)) return;  // There was an error.
-  
-  int ret_val = connect(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
-  if (ret_val == -1) {
-    send_callback_os_error(conn, "connect", conn);
-    return remove_last_polling_conn();
-  }
-
-  send_callback(conn, msg_connection_ready, msg_no_data);
+  int for_listening = false;
+  open_socket(address, conn_context, callback, for_listening);
 }
 
 void msg_disconnect(msg_Conn *conn) {
