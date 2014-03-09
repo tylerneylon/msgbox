@@ -18,6 +18,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// TODO TEMP remove
+#include <stdio.h>
+
+#include "memprofile.h"
+
 ///////////////////////////////////////////////////////////////////////////////
 // udp server
 
@@ -106,10 +111,14 @@ int udp_test() {
     // Child process.
     exit(udp_server());
   } else {
-    // Parent process continues.
+    // Parent process.
     int client_failed = udp_client();
     int server_failed;
     wait(&server_failed);
+    
+    // TODO Check for memory leaks.
+    //printmeminfo();
+  
     return client_failed || server_failed;
   }
 }

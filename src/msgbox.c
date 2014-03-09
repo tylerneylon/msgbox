@@ -22,6 +22,7 @@
 // on the DEBUG preprocessor definition.
 
 #ifdef DEBUG
+#include "memprofile.h"
 #include <assert.h>
 #else
 #define assert(x)
