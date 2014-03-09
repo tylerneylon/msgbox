@@ -44,6 +44,9 @@ We have 4 16-bit integers to work with - treat them all as unsigned.
 
 ### How do servers respond when they see a new connection?
 
+*Note*: I decided that most of this section is made
+obsolete by the notes in the heartbeats section.
+
 Let's see if we can implement this without needing a `CMap`.
 
 If the client sends over a new connection type of packet - this can be
@@ -63,3 +66,35 @@ and we simply remove the key when the corresponding conn has been closed.
 Closing a conn means that we remove it from the `nonpolling_conns` list and
 trigger a `msg_connection_closed` event, with the conn itself scheduled to
 be freed after that callback.
+
+### Heartbeats
+
+Don't create a new `msg_Conn` on a udp server for a new connection. The philosophy
+is to keep things thin and close to the system.
+
+Rename `nonpolling_conns` to `out_beats`; it's a `CList` that we rotate through.
+
+How do we detect when we've lost a connection?
+
+Keep a `CMap` from remote ip:port as a string to a struct that keeps
+track of the last time we've heard from them.
+Let's call this `conn_status`.
+We check `conn_status` as we
+go through `out_beats`. If we haven't heard from them in a while, we report
+the connection as lost, and add it to `pending_closes`.
+
+When any message, including a heartbeat comes in, we do a lookup in `conn_status`.
+If the remote address is missing, we add it and send out a `msg_connection_ready`.
+
+I think this removes the need for an is_new_conn bit in our header.
+
+When a connection is closed or lost, we do this:
+* Remove it from `conn_status`
+* Add it to `pending_closes`; it gets removed along with it's outgoing
+  heartbeat when we see it in the `out_beats` rotation.
+
+When a connection is added, we do this:
+* Add it to `conn_status`
+* Add it to `out_beats`
+
+Note there is a weird case where a connection is in `pending_closes` and is added back before its ghost is removed from `out_beats`. I think this is actually fine since in the end, the old one is removed (it's next in the rotation), and the new one remains. The user sees a connection closed or lost event followed by a connection ready event, which is the correct order.
