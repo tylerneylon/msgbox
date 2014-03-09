@@ -37,14 +37,11 @@
 // an error string when an error is encountered.
 #define no_error NULL
 
-// We only need 6 bytes, but it's nice to keep the user's data
-// pointer 8-byte aligned, so we reserve 8 bytes for the header.
-#define header_len 8
 #define recv_buffer_len 32768
 
 #define sock_in_size sizeof(struct sockaddr_in)
 
-// TEMP TODO remove; these are for temporary testing
+// TODO remove; these are for temporary testing
 #include <stdio.h>
 
 typedef struct {
@@ -72,13 +69,23 @@ static CArray immediate_callbacks = NULL;
 static CArray poll_fds = NULL;
 static CArray conns = NULL;
 
+// Possible values for message_type
+enum {
+  one_way,
+  request,
+  reply,
+  heartbeat,
+  close
+};
+
 typedef struct {
-  uint16_t reply_id;
+  uint16_t message_type;
   uint16_t num_packets;
   uint16_t packet_id;
+  uint16_t reply_id;
 } Header;
-// TODO
-// * Make sure this struct is used throughout the code.
+
+#define header_len 8
 
 // Header values for the reply_id field.
 static uint16_t next_reply_id = 1;
@@ -201,36 +208,52 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
   return no_error;
 }
 
+static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_packets,
+    uint16_t packet_id, uint16_t reply_id) {
+  Header *header = (Header *)(data.bytes - header_len);
+  *header = (Header) {
+    .message_type = htons(msg_type), .num_packets = htons(num_packets),
+    .packet_id = htons(packet_id), .reply_id = htons(reply_id)};
+}
+
 // Reads the header of a udp packet.
 // Returns true on success; false on failure.
-static int read_header(int sock, msg_Conn *conn, int *num_packets, int *packet_id) {
-  static uint16_t buffer[(header_len / sizeof(uint16_t))];
+static int read_header(int sock, msg_Conn *conn, Header *header) {
+  uint16_t *buffer = (uint16_t *)header;
   ssize_t bytes_recvd = recv(sock, buffer, header_len, MSG_PEEK);
   if (bytes_recvd == -1) {
     send_callback_os_error(conn, "recv", NULL);
     return false;
   }
-  conn->reply_id = ntohs(buffer[0]);
-  *num_packets = ntohs(buffer[1]);
-  *packet_id = ntohs(buffer[2]);
+  // Convert each field from network to host byte ordering.
+  static const size_t num_shorts = header_len / sizeof(uint16_t);
+  for (int i = 0; i < num_shorts; ++i) buffer[i] = ntohs(buffer[i]);
+  conn->reply_id = header->reply_id;
   return true;
 }
 
 static void read_from_socket(int sock, msg_Conn *conn) {
   //printf("%s(%d, %p)\n", __func__, sock, conn);
-  int num_packets, packet_id;
-  if (!read_header(sock, conn, &num_packets, &packet_id)) return;
+  Header header;
+  if (!read_header(sock, conn, &header)) return;
   //printf("reply_id(raw)=%d num_packets=%d packet_id=%d.\n", conn->reply_id, num_packets, packet_id);
 
-  int is_reply = !!(conn->reply_id & is_reply_mask);
-  conn->reply_id &= !is_reply_mask;  // Ensure the is_reply bit is off.
-
-  //printf("reply_id=%d is_reply=%d.\n", conn->reply_id, is_reply);
-
-  msg_Event event = msg_message;
-  if (conn->reply_id) event = is_reply ? msg_reply : msg_request;
-
-  if (num_packets == 1) {
+  msg_Event event;
+  switch (header.message_type) {
+    case one_way:
+      event = msg_message;
+      break;
+    case request:
+      event = msg_request;
+      break;
+    case reply:
+      event = msg_reply;
+      break;
+    default:
+      assert(0);
+  }
+  
+  if (header.num_packets == 1) {
     char *buffer = malloc(recv_buffer_len);
     int default_options = 0;
     struct sockaddr_in remote_sockaddr;
@@ -248,6 +271,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
   } else {
     // TODO Handle the multi-packet case.
+    assert(0);
   }
 }
 
@@ -397,12 +421,9 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   //printf("%s: '%s'\n", __func__, msg_as_str(data));
 
   // Set up the header.
-  // TODO Encapsulate header setup in a function.
-  Header *header = (Header *)(data.bytes - header_len);
-  header->reply_id = htons(one_way_msg);
+  int num_packets = 1, packet_id = 0, reply_id = 0;
+  set_header(data, one_way, num_packets, packet_id, reply_id);
   // TODO Be able to handle multi-packet data.
-  header->num_packets = htons(1);
-  // packet_id is ignored for one-packet messages.
 
   int default_options = 0;
   //printf("protocol_type=%d for_listening=%d.\n", conn->protocol_type, conn->for_listening);
