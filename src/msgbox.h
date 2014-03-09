@@ -27,8 +27,6 @@ typedef struct {
   char *bytes;
 } msg_Data;
 
-// TODO Consider renaming this to be consistent with the convention that
-// types are camel case and everything else uses underscores.
 typedef enum {
   msg_message,
   msg_request,

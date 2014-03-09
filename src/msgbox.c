@@ -79,7 +79,6 @@ typedef struct {
 } Header;
 // TODO
 // * Make sure this struct is used throughout the code.
-// * Do I need to worry about byte-order? I suspect yes.
 
 // Header values for the reply_id field.
 static uint16_t next_reply_id = 1;
@@ -128,10 +127,9 @@ static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_fre
   send_callback_error(conn, err_msg, to_free);
 }
 
-// TODO Use this function as much as possible.
 // Returns no_error (NULL) on success; otherwise an error string.
 static char *set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn) {
-  memset(sockaddr, 0, sizeof(struct sockaddr_in));
+  memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
   char *ip_str = conn->remote_address;
@@ -236,7 +234,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     char *buffer = malloc(recv_buffer_len);
     int default_options = 0;
     struct sockaddr_in remote_sockaddr;
-    socklen_t remote_sockaddr_size = sizeof(remote_sockaddr);
+    socklen_t remote_sockaddr_size = sock_in_size;
     ssize_t bytes_recvd = recvfrom(sock, buffer, recv_buffer_len, default_options,
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
@@ -287,7 +285,7 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
     return false;
   }
 
-  // Set up the sockaddr_in struct.
+  // Initialize the sockaddr_in struct.
   memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
@@ -414,7 +412,7 @@ void msg_send(msg_Conn *conn, msg_Data data) {
     char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
     if (err_msg) return send_callback_error(conn, err_msg, NULL);
     sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
-        (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_in));
+        (struct sockaddr *)&sockaddr, sock_in_size);
   } else {
     //printf("Using send.\n");
     send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
