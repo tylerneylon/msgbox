@@ -132,7 +132,7 @@ static char *set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn)
   memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
-  char *ip_str = conn->remote_address;
+  char *ip_str = conn->remote_ip;
   if (strcmp(ip_str, "*") == 0) {
     sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
   } else if (inet_aton(ip_str, &sockaddr->sin_addr) == 0) {
@@ -144,7 +144,7 @@ static char *set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn)
 }
 
 // Returns no_error (NULL) on success, and sets the protocol_type,
-// remote_address, and remote_port of the given conn.
+// remote_ip, and remote_port of the given conn.
 // Returns an error string if there was an error.
 static const char *parse_address_str(const char *address, msg_Conn *conn) {
   assert(conn != NULL);
@@ -182,7 +182,7 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
         ip_len, address);
     return err_msg;
   }
-  char *ip_str_end = stpncpy(conn->remote_address, ip_start, ip_len);
+  char *ip_str_end = stpncpy(conn->remote_ip, ip_start, ip_len);
   *ip_str_end = '\0';
 
   // Parse the port.
@@ -241,7 +241,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
 
     msg_Data data = {bytes_recvd - header_len, buffer + header_len};
-    strcpy(conn->remote_address, inet_ntoa(remote_sockaddr.sin_addr));
+    strcpy(conn->remote_ip, inet_ntoa(remote_sockaddr.sin_addr));
     conn->remote_port = ntohs(remote_sockaddr.sin_port);
 
     send_callback(conn, event, data);
@@ -289,12 +289,12 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
-  if (strcmp(conn->remote_address, "*") == 0) {
+  if (strcmp(conn->remote_ip, "*") == 0) {
     sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
-  } else if (inet_aton(conn->remote_address, &sockaddr->sin_addr) == 0) {
+  } else if (inet_aton(conn->remote_ip, &sockaddr->sin_addr) == 0) {
     remove_last_polling_conn();
     static char err_msg[1024];
-    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_address);
+    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_ip);
     send_callback_error(conn, err_msg, conn);
     return false;
   }

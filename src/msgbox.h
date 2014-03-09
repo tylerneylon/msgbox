@@ -48,7 +48,7 @@ typedef struct msg_Conn {
   msg_Callback callback;
 
   int protocol_type;  // Valid values are msg_tcp or msg_udp.
-  char remote_address[16];  // TODO Rename this to remote_ip.
+  char remote_ip[16];
   uint16_t remote_port;
 
   int socket;
