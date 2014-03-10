@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 // Possible future features
 //
@@ -78,11 +79,11 @@ static CArray conns = NULL;
 
 // Possible values for message_type
 enum {
-  one_way,
-  request,
-  reply,
-  heartbeat,
-  close
+  msg_type_one_way,
+  msg_type_request,
+  msg_type_reply,
+  msg_type_heartbeat,
+  msg_type_close
 };
 
 typedef struct {
@@ -305,6 +306,8 @@ static void local_disconnect(msg_Conn *conn) {
   Address *address = (Address *)(&conn->remote_ip);
   CMapUnset(conn_status, address);
   send_callback(conn, msg_connection_closed, msg_no_data, conn);
+
+  if (!conn->for_listening) close(conn->socket);
 }
 
 static void read_from_socket(int sock, msg_Conn *conn) {
@@ -315,11 +318,11 @@ static void read_from_socket(int sock, msg_Conn *conn) {
   if (0) {
     // TODO Remove. Debug code.
     char *msg_type_str[] = {
-      "one_way",
-      "request",
-      "reply",
-      "heartbeat",
-      "close"
+      "msg_type_one_way",
+      "msg_type_request",
+      "msg_type_reply",
+      "msg_type_heartbeat",
+      "msg_type_close"
     };
     if (header.message_type < (sizeof(msg_type_str) / sizeof(char *))) {
       printf("Received message of type '%s'.\n", msg_type_str[header.message_type]);
@@ -330,19 +333,19 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
   msg_Event event;
   switch (header.message_type) {
-    case one_way:
+    case msg_type_one_way:
       event = msg_message;
       break;
-    case request:
+    case msg_type_request:
       event = msg_request;
       break;
-    case reply:
+    case msg_type_reply:
       event = msg_reply;
       break;
-    case heartbeat:
+    case msg_type_heartbeat:
       assert(0);
       break;
-    case close:
+    case msg_type_close:
       return local_disconnect(conn);
   }
 
@@ -510,7 +513,7 @@ void msg_disconnect(msg_Conn *conn) {
   // TODO Think carefully about this and make sure it does what we want for either client or server.
   msg_Data data = msg_new_data_space(0);
   int num_packets = 1, packet_id = 0, reply_id = 0;
-  set_header(data, close, num_packets, packet_id, reply_id);
+  set_header(data, msg_type_close, num_packets, packet_id, reply_id);
 
   int default_options = 0;
   send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
@@ -524,7 +527,7 @@ void msg_send(msg_Conn *conn, msg_Data data) {
 
   // Set up the header.
   int num_packets = 1, packet_id = 0, reply_id = 0;
-  set_header(data, one_way, num_packets, packet_id, reply_id);
+  set_header(data, msg_type_one_way, num_packets, packet_id, reply_id);
   // TODO Be able to handle multi-packet data.
 
   int default_options = 0;
