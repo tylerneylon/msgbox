@@ -47,9 +47,9 @@ typedef struct msg_Conn {
   void *reply_context;
   msg_Callback callback;
 
-  int protocol_type;  // Valid values are msg_tcp or msg_udp.
-  char remote_ip[16];
+  uint32_t remote_ip;
   uint16_t remote_port;
+  uint16_t protocol_type;  // Valid values are msg_tcp or msg_udp.
 
   int socket;
   int for_listening;
@@ -73,13 +73,17 @@ void msg_disconnect(msg_Conn *conn);
 void msg_send(msg_Conn *conn, msg_Data data);
 void msg_get(msg_Conn *conn, msg_Data data, void *reply_context);
 
-// Convenience functions for working with strings as messages.
+// Functions for working with msg_Data.
 
 char *msg_as_str(msg_Data data);
 
 msg_Data msg_new_data(const char *str);
 msg_Data msg_new_data_space(size_t num_bytes);
 void msg_delete_data(msg_Data data);
+
+// Functions for working with msg_Conn.
+
+char *msg_ip_str(msg_Conn *conn);
 
 // Functions for working with errors.
 

@@ -57,7 +57,7 @@ void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
   if (event == msg_message) {
     test_printf("Server: Message: Echoing a message back to %s:%d.\n",
-        conn->remote_ip, conn->remote_port);
+        msg_ip_str(conn), conn->remote_port);
     test_printf("Server: The message is '%s'.\n", msg_as_str(data));
     test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
     msg_send(conn, data);
@@ -89,12 +89,12 @@ void udp_client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   // msg_ConnectionReady, msg_Message
   switch(event) {
     case msg_connection_ready:
-      test_printf("Client: Connection ready with %s.\n", conn->remote_ip);
+      test_printf("Client: Connection ready with %s.\n", msg_ip_str(conn));
       test_that(event_num == 1);
       msg_send(conn, msg_new_data("hello msgbox!"));
       break;
     case msg_message:
-      test_printf("Client: Message from %s:%d.\n", conn->remote_ip, conn->remote_port);
+      test_printf("Client: Message from %s:%d.\n", msg_ip_str(conn), conn->remote_port);
       test_printf("Client: The message is '%s'.\n", msg_as_str(data));
       test_that(event_num == 2);
       test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);

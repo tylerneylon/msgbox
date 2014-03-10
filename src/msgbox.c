@@ -102,7 +102,7 @@ static const uint16_t max_reply_id = (1 << 15) - 1;  // = bits:01..1 with 15 one
 //  Connection status map.
 
 typedef struct {
-  unsigned long ip;
+  uint32_t ip;
   uint16_t port;
   uint16_t protocol_type;
 } Address;
@@ -178,14 +178,7 @@ static char *set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn)
   memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
-  char *ip_str = conn->remote_ip;
-  if (strcmp(ip_str, "*") == 0) {
-    sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
-  } else if (inet_aton(ip_str, &sockaddr->sin_addr) == 0) {
-    static char err_msg[1024];
-    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", ip_str);
-    return err_msg;
-  }
+  sockaddr->sin_addr.s_addr = conn->remote_ip;
   return no_error;
 }
 
@@ -213,14 +206,16 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
     return err_msg;
   }
 
-  // Parse the ip_str.
-  // The syntax within ip_str is checked by inet_aton for us.
+  // Parse the ip substring in three steps.
+  // 1. Find start and end of the ip substring.
   const char *ip_start = address + prefix_len;
   char *colon = strchr(ip_start, ':');
   if (colon == NULL) {
     snprintf(err_msg, 1024, "Can't parse address '%s'; missing colon after ip", address);
     return err_msg;
   }
+
+  // 2. Check substring length and copy over so we can hand inet_aton a null-terminated version.
   size_t ip_len = colon - ip_start;
   if (ip_len > 15 || ip_len < 1) {
     snprintf(err_msg, 1024,
@@ -228,8 +223,21 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
         ip_len, address);
     return err_msg;
   }
-  char *ip_str_end = stpncpy(conn->remote_ip, ip_start, ip_len);
+  char ip_str[16];
+  char *ip_str_end = stpncpy(ip_str, ip_start, ip_len);
   *ip_str_end = '\0';
+
+  // 3. Let inet_aton handle the actual parsing.
+  if (strcmp(ip_str, "*") == 0) {
+    conn->remote_ip = INADDR_ANY;
+  } else {
+    struct in_addr ip;
+    if (inet_aton(ip_str, &ip) == 0) {
+      snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", ip_str);
+      return err_msg;
+    }
+    conn->remote_ip = ip.s_addr;
+  }
 
   // Parse the port.
   int base_ten = 10;
@@ -322,7 +330,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
 
     msg_Data data = {bytes_recvd - header_len, buffer + header_len};
-    strcpy(conn->remote_ip, inet_ntoa(remote_sockaddr.sin_addr));
+    conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
     conn->remote_port = ntohs(remote_sockaddr.sin_port);
     remote_address_seen(conn, &remote_sockaddr);
 
@@ -372,15 +380,7 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   memset(sockaddr, 0, sock_in_size);
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(conn->remote_port);
-  if (strcmp(conn->remote_ip, "*") == 0) {
-    sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
-  } else if (inet_aton(conn->remote_ip, &sockaddr->sin_addr) == 0) {
-    remove_last_polling_conn();
-    static char err_msg[1024];
-    snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", conn->remote_ip);
-    send_callback_error(conn, err_msg, conn);
-    return false;
-  }
+  sockaddr->sin_addr.s_addr = conn->remote_ip;
 
   return true;
 }
@@ -487,6 +487,8 @@ void msg_disconnect(msg_Conn *conn) {
 
   int default_options = 0;
   send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
+
+
   // TODO When is this data freed?
 }
 
@@ -535,6 +537,10 @@ msg_Data msg_new_data_space(size_t num_bytes) {
 
 void msg_delete_data(msg_Data data) {
   free(data.bytes - header_len);
+}
+
+char *msg_ip_str(msg_Conn *conn) {
+  return inet_ntoa((struct in_addr) { .s_addr = conn->remote_ip});
 }
 
 char *msg_error_str(msg_Data data) {
