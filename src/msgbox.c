@@ -300,11 +300,33 @@ static void remote_address_seen(msg_Conn *conn, struct sockaddr_in *sockaddr) {
   }
 }
 
+// Drops the conn from conn_status and sends msg_connection_closed.
+static void local_disconnect(msg_Conn *conn) {
+  Address *address = (Address *)(&conn->remote_ip);
+  CMapUnset(conn_status, address);
+  send_callback(conn, msg_connection_closed, msg_no_data, conn);
+}
+
 static void read_from_socket(int sock, msg_Conn *conn) {
   //printf("%s(%d, %p)\n", __func__, sock, conn);
   Header header;
   if (!read_header(sock, conn, &header)) return;
-  //printf("reply_id(raw)=%d num_packets=%d packet_id=%d.\n", conn->reply_id, num_packets, packet_id);
+
+  if (0) {
+    // TODO Remove. Debug code.
+    char *msg_type_str[] = {
+      "one_way",
+      "request",
+      "reply",
+      "heartbeat",
+      "close"
+    };
+    if (header.message_type < (sizeof(msg_type_str) / sizeof(char *))) {
+      printf("Received message of type '%s'.\n", msg_type_str[header.message_type]);
+    } else {
+      printf("Received message of unknown type %d.\n", header.message_type);
+    }
+  }
 
   msg_Event event;
   switch (header.message_type) {
@@ -317,8 +339,11 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     case reply:
       event = msg_reply;
       break;
-    default:
+    case heartbeat:
       assert(0);
+      break;
+    case close:
+      return local_disconnect(conn);
   }
 
   if (header.num_packets == 1) {
@@ -491,10 +516,7 @@ void msg_disconnect(msg_Conn *conn) {
   send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
   msg_delete_data(data);
 
-  // Remove conn from conn_status.
-  Address *address = (Address *)(&conn->remote_ip);
-  CMapUnset(conn_status, address);
-  send_callback(conn, msg_connection_closed, msg_no_data, conn);
+  local_disconnect(conn);
 }
 
 void msg_send(msg_Conn *conn, msg_Data data) {

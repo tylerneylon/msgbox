@@ -49,7 +49,8 @@ void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   static int event_num = 0;
 
   // We expect to hear events in this order:
-  int expected_events[] = {msg_listening, msg_connection_ready, msg_message};
+  int expected_events[] = {
+    msg_listening, msg_connection_ready, msg_message, msg_connection_closed};
   test_printf("Server: Received event %s\n", event_names[event]);
   if (event == msg_error) test_printf("Server: Error: %s\n", msg_as_str(data));
   test_that(event_num < array_size(expected_events));
@@ -61,7 +62,10 @@ void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     test_printf("Server: The message is '%s'.\n", msg_as_str(data));
     test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
     msg_send(conn, data);
+  }
 
+  if (event == msg_connection_closed) {
+    test_printf("Server: Connection closed.\n");
     server_done = 1;
   }
 
@@ -72,6 +76,10 @@ int udp_server() {
   msg_listen("udp://*:1234", msg_no_context, udp_server_update);
   int timeout_in_ms = 10;
   while (!server_done) msg_runloop(timeout_in_ms);
+
+  // Sleep for 1ms as the client expects to finish before the server.
+  // (Early server termination could be an error, so we check for it.)
+  usleep(1000);
 
   return test_success;
 }
@@ -124,7 +132,9 @@ int udp_client(pid_t server_pid) {
 
     // Check to see if the server process ended before we expected it to.
     int status;
-    if (!client_done && waitpid(server_pid, &status, WNOHANG)) return test_failure;
+    if (!client_done && waitpid(server_pid, &status, WNOHANG)) {
+      test_failed("Server process ended before client expected.");
+    }
   }
 
   return test_success;
@@ -147,6 +157,8 @@ int udp_test() {
 
     // TODO Check for memory leaks.
     //printmeminfo();
+
+    test_printf("Test: client_failed=%d server_failed=%d.\n", client_failed, server_failed);
 
     return client_failed || server_failed;
   }
