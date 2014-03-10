@@ -392,7 +392,7 @@ static void open_socket(const char *address, void *conn_context,
   msg_Conn *conn = new_connection(conn_context, callback);
   conn->for_listening = for_listening;
   struct sockaddr_in *sockaddr = alloca(sock_in_size);
-  if (!setup_sockaddr(sockaddr, address, conn)) return;  // There was an error.
+  if (!setup_sockaddr(sockaddr, address, conn)) return;  // Error; setup_sockaddr now owns conn.
 
   SocketOpener sys_open_sock = for_listening ? bind : connect;
   int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
@@ -401,8 +401,11 @@ static void open_socket(const char *address, void *conn_context,
     return remove_last_polling_conn();
   }
 
-  msg_Event event = for_listening ? msg_listening : msg_connection_ready;
-  send_callback(conn, event, msg_no_data, NULL);
+  if (for_listening) {
+    send_callback(conn, msg_listening, msg_no_data, NULL);
+  } else {
+    remote_address_seen(conn, sockaddr);  // Sends the msg_connection_ready event.
+  }
 }
 
 

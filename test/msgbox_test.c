@@ -23,37 +23,52 @@
 
 #include "memprofile.h"
 
+#define array_size(x) (sizeof(x) / sizeof(x[0]))
+
+
+///////////////////////////////////////////////////////////////////////////////
+// useful globals and functions
+
+static char *event_names[] = {
+  "msg_message",
+  "msg_request",
+  "msg_reply",
+  "msg_listening",
+  "msg_connection_ready",
+  "msg_connection_closed",
+  "msg_connection_lost",
+  "msg_error"
+};
+
 ///////////////////////////////////////////////////////////////////////////////
 // udp server
 
 int server_done = 0;
 
 void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
-  static int event_num = 1;
+  static int event_num = 0;
+
   // We expect to hear events in this order:
-  // msg_listening, msg_message
-  switch(event) {
-    case msg_listening:
-      test_printf("%s: Listening.\n", __func__);
-      test_that(event_num == 1);
-      break;
-    case msg_message:
-      test_printf("Message: Echoing a message back to %s:%d.\n",
-          conn->remote_ip, conn->remote_port);
-      test_printf("The message is '%s'.\n", msg_as_str(data));
-      test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
-      test_that(event_num == 2);
-      msg_send(conn, data);
-      server_done = 1;
-      break;
-    default:
-      test_failed("Unexpected event (%d) in %s.", event, __func__);
+  int expected_events[] = {msg_listening, msg_connection_ready, msg_message};
+  test_printf("Server: Received event %s\n", event_names[event]);
+  if (event == msg_error) test_printf("Server: Error: %s\n", msg_as_str(data));
+  test_that(event_num < array_size(expected_events));
+  test_that(event == expected_events[event_num]);
+
+  if (event == msg_message) {
+    test_printf("Server: Message: Echoing a message back to %s:%d.\n",
+        conn->remote_ip, conn->remote_port);
+    test_printf("Server: The message is '%s'.\n", msg_as_str(data));
+    test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
+    msg_send(conn, data);
+
+    server_done = 1;
   }
+
   event_num++;
 }
 
 int udp_server() {
-
   msg_listen("udp://*:1234", msg_no_context, udp_server_update);
   int timeout_in_ms = 10;
   while (!server_done) msg_runloop(timeout_in_ms);
@@ -74,19 +89,19 @@ void udp_client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   // msg_ConnectionReady, msg_Message
   switch(event) {
     case msg_connection_ready:
-      test_printf("Connection ready with %s.\n", conn->remote_ip);
+      test_printf("Client: Connection ready with %s.\n", conn->remote_ip);
       test_that(event_num == 1);
       msg_send(conn, msg_new_data("hello msgbox!"));
       break;
     case msg_message:
-      test_printf("Message from %s:%d.\n", conn->remote_ip, conn->remote_port);
-      test_printf("The message is '%s'.\n", msg_as_str(data));
+      test_printf("Client: Message from %s:%d.\n", conn->remote_ip, conn->remote_port);
+      test_printf("Client: The message is '%s'.\n", msg_as_str(data));
       test_that(event_num == 2);
       test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
       client_done = 1;
       break;
     default:
-      test_failed("Unexpected event (%d) in %s.", event, __func__);
+      test_failed("Client: Unexpected event (%d) in %s.", event, __func__);
   }
   event_num++;
 }

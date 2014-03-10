@@ -122,7 +122,8 @@ void test_failed(char *reason_fmt, ...) {
     // If log_is_verbose, then the log is already printed out by now.
     printf("\r%s - failed \n\n", program_name);
     printf("Failed in test '%s'; log follows:\n---\n", test_name);
-    printf("%s\n---\n", log);
+    int ends_with_newline = log[strlen(log) - 1] == '\n';
+    printf("%s%s---\n", log, ends_with_newline ? "" : "\n");
   }
   if (reason_fmt && strlen(reason_fmt)) {
     va_list args;
