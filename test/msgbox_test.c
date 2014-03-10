@@ -84,25 +84,32 @@ int client_done = 0;
 // TODO test message values here and above.
 
 void udp_client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
-  static int event_num = 1;
+  static int event_num = 0;
+
   // We expect to hear events in this order:
-  // msg_ConnectionReady, msg_Message
-  switch(event) {
-    case msg_connection_ready:
-      test_printf("Client: Connection ready with %s.\n", msg_ip_str(conn));
-      test_that(event_num == 1);
-      msg_send(conn, msg_new_data("hello msgbox!"));
-      break;
-    case msg_message:
-      test_printf("Client: Message from %s:%d.\n", msg_ip_str(conn), conn->remote_port);
-      test_printf("Client: The message is '%s'.\n", msg_as_str(data));
-      test_that(event_num == 2);
-      test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
-      client_done = 1;
-      break;
-    default:
-      test_failed("Client: Unexpected event (%d) in %s.", event, __func__);
+  int expected_events[] = {msg_connection_ready, msg_message, msg_connection_closed};
+  test_printf("Client: Received event %s\n", event_names[event]);
+  if (event == msg_error) test_printf("Client: Error: %s\n", msg_as_str(data));
+  test_that(event_num < array_size(expected_events));
+  test_that(event == expected_events[event_num]);
+
+  if (event == msg_connection_ready) {
+    msg_send(conn, msg_new_data("hello msgbox!"));
   }
+
+  if (event == msg_message) {
+    test_printf("Client: Message from %s:%d.\n", msg_ip_str(conn), conn->remote_port);
+    test_printf("Client: The message is '%s'.\n", msg_as_str(data));
+    test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
+
+    msg_disconnect(conn);
+  }
+
+  if (event == msg_connection_closed) {
+    test_printf("Client: Connection closed.\n");
+    client_done = 1;
+  }
+
   event_num++;
 }
 

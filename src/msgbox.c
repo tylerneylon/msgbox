@@ -67,6 +67,8 @@ typedef struct {
 //
 // **. Try to eliminate unnamed function call parameter.
 //
+// **. Make the address info in msg_Conn an official Address object.
+//
 
 static CArray immediate_callbacks = NULL;
 
@@ -487,9 +489,12 @@ void msg_disconnect(msg_Conn *conn) {
 
   int default_options = 0;
   send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
+  msg_delete_data(data);
 
-
-  // TODO When is this data freed?
+  // Remove conn from conn_status.
+  Address *address = (Address *)(&conn->remote_ip);
+  CMapUnset(conn_status, address);
+  send_callback(conn, msg_connection_closed, msg_no_data, conn);
 }
 
 void msg_send(msg_Conn *conn, msg_Data data) {
