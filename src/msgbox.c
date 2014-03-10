@@ -44,6 +44,8 @@
 // TODO remove; these are for temporary testing
 #include <stdio.h>
 
+static msg_Data msg_no_data = { .num_bytes = 0, .bytes = NULL};
+
 typedef struct {
   msg_Conn *conn;
   msg_Event event;
@@ -474,7 +476,11 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
   open_socket(address, conn_context, callback, for_listening);
 }
 
-void msg_close(msg_Conn *conn) {
+void msg_unlisten(msg_Conn *conn) {
+}
+
+void msg_disconnect(msg_Conn *conn) {
+  // TODO Think carefully about this and make sure it does what we want for either client or server.
   msg_Data data = msg_new_data_space(0);
   int num_packets = 1, packet_id = 0, reply_id = 0;
   set_header(data, close, num_packets, packet_id, reply_id);
@@ -536,8 +542,6 @@ char *msg_error_str(msg_Data data) {
 }
 
 void *msg_no_context = NULL;
-
-msg_Data msg_no_data = {0, NULL};
 
 const int msg_tcp = SOCK_STREAM;
 const int msg_udp = SOCK_DGRAM;

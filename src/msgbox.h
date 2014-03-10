@@ -64,7 +64,9 @@ void msg_runloop(int timeout_in_ms);
 
 void msg_listen(const char *address, void *conn_context, msg_Callback callback);
 void msg_connect(const char *address, void *conn_context, msg_Callback callback);
-void msg_close(msg_Conn *conn);
+
+void msg_unlisten(msg_Conn *conn);
+void msg_disconnect(msg_Conn *conn);
 
 // Calls to send a message. Call get when you expect a reply; otherwise call send.
 
@@ -86,12 +88,9 @@ char *msg_error_str(msg_Data data);
 // Constants.
 
 extern void *msg_no_context;
-extern msg_Data msg_no_data;
 
 // Valid values for msg_Conn.protocol_type.
 extern const int msg_udp;
 extern const int msg_tcp;
 
 #endif // __MSG_MSGBOX_H__
-
-
