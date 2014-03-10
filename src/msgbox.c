@@ -1,6 +1,8 @@
 #include "msgbox.h"
 
 #include "CArray.h"
+#include "CList.h"
+#include "CMap.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -46,21 +48,24 @@ typedef struct {
   msg_Conn *conn;
   msg_Event event;
   msg_Data data;
-  void *free_after_call;
-} PendingCallback;
+  void *to_free;
+} PendingCall;
 
-// TODO after tcp is added and most functionality is done
+// TODO
+// **. after tcp is added and most functionality is done
 // Solidify the rules for how we call free after a callback is called.
 // Right now they're something like this:
-// * free(free_after_call) if free_after_call != NULL
+// * free(to_free) if to_free != NULL
 // * free data->bytes if it's a tcp message and !NULL; (? revisit)
 // * free data->bytes - header_len if it's a udp message and !NULL.
 //
 // For connection closes (closed or lost), the msg_Conn object will have already
 // been removed from conns (and the socket removed from poll_fds), and the conn
-// object will be a copy of the original set as free_after_call.
+// object will be a copy of the original set as to_free.
+//
+// **. Try to eliminate unnamed function call parameter.
+//
 
-static int init_done = false;
 static CArray immediate_callbacks = NULL;
 
 // These arrays have corresponding elements at the same index.
@@ -92,6 +97,39 @@ static const uint16_t is_reply_mask = 1 << 15;
 static const uint16_t max_reply_id = (1 << 15) - 1;  // = bits:01..1 with 15 ones.
 
 ///////////////////////////////////////////////////////////////////////////////
+//  Connection status map.
+
+typedef struct {
+  unsigned long ip;
+  uint16_t port;
+  uint16_t protocol_type;
+} Address;
+
+int address_hash(void *address) {
+  char *bytes = (char *)address;
+  int hash = 0;
+  for (int i = 0; i < sizeof(Address); ++i) {
+    hash *= 234;
+    hash += bytes[i];
+  }
+  return hash;
+}
+
+int address_eq(void *addr1, void *addr2) {
+  return memcmp(addr1, addr2, sizeof(Address)) == 0;
+}
+
+typedef struct {
+  double last_seen_at;
+} ConnStatus;
+
+// This maps Address -> ConnStatus.
+// The actual keys & values are pointers to those types,
+// and the releasers free them.
+// TODO Once out_beats is added, let out_beats own the ConnStatus objects.
+static CMap conn_status = NULL;
+
+///////////////////////////////////////////////////////////////////////////////
 //  Internal functions.
 
 void CArrayRemoveLast(CArray array) {
@@ -104,29 +142,30 @@ void remove_last_polling_conn() {
 }
 
 static void init_if_needed() {
+  static int init_done = false;
   if (init_done) return;
 
-  immediate_callbacks = CArrayNew(16, sizeof(PendingCallback));
+  immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
   poll_fds = CArrayNew(8, sizeof(struct pollfd));
   conns = CArrayNew(8, sizeof(msg_Conn *));
+
+  conn_status = CMapNew(address_hash, address_eq);
+  conn_status->keyReleaser = free;
+  conn_status->valueReleaser = free;
 
   init_done = true;
 }
 
-static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data) {
-  //printf("%s: event=%d.\n", __func__, event);
-  PendingCallback pending_callback = {conn, event, data, NULL};
+static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data, void *to_free) {
+  PendingCall pending_callback = {.conn = conn, .event = event, .data = data, .to_free = to_free};
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
 static void send_callback_error(msg_Conn *conn, const char *msg, void *to_free) {
-  //printf("%s: %s.\n", __func__, msg);
-  PendingCallback pending_callback = {conn, msg_error, msg_new_data(msg), to_free};
-  CArrayAddElement(immediate_callbacks, pending_callback);
+  send_callback(conn, msg_error, msg_new_data(msg), to_free);
 }
 
 static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_free) {
-  //printf("%s: %s.\n", __func__, msg);
   static char err_msg[1024];
   snprintf(err_msg, 1024, "%s: %s", msg, strerror(errno));
   send_callback_error(conn, err_msg, to_free);
@@ -202,7 +241,7 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
     snprintf(err_msg, 1024, "Invalid port string in address '%s'", address);
     return err_msg;
   }
-  
+
   return no_error;
 }
 
@@ -230,6 +269,24 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   return true;
 }
 
+static void remote_address_seen(msg_Conn *conn, struct sockaddr_in *sockaddr) {
+  Address *address = malloc(sizeof(Address));
+  address->ip = sockaddr->sin_addr.s_addr;
+  address->port = conn->remote_port;
+  address->protocol_type = conn->protocol_type;
+
+  KeyValuePair *pair;
+  if ((pair = CMapFind(conn_status, address))) {
+    // TODO Update the timing data for this remote address.
+    free(address);
+  } else {
+    // It's a new remote address; conn_status takes ownership of address.
+    ConnStatus *status = malloc(sizeof(ConnStatus));
+    status->last_seen_at = 0.0;  // TODO Populate with the real time.
+    CMapSet(conn_status, address, status);
+  }
+}
+
 static void read_from_socket(int sock, msg_Conn *conn) {
   //printf("%s(%d, %p)\n", __func__, sock, conn);
   Header header;
@@ -250,7 +307,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     default:
       assert(0);
   }
-  
+
   if (header.num_packets == 1) {
     char *buffer = malloc(recv_buffer_len);
     int default_options = 0;
@@ -265,7 +322,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     strcpy(conn->remote_ip, inet_ntoa(remote_sockaddr.sin_addr));
     conn->remote_port = ntohs(remote_sockaddr.sin_port);
 
-    send_callback(conn, event, data);
+    send_callback(conn, event, data, NULL);
 
   } else {
     // TODO Handle the multi-packet case.
@@ -274,7 +331,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 }
 
 static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
-  msg_Conn *conn = (msg_Conn *)malloc(sizeof(msg_Conn));
+  msg_Conn *conn = malloc(sizeof(msg_Conn));
   memset(conn, 0, sizeof(msg_Conn));
   conn->conn_context = conn_context;
   conn->callback = callback;
@@ -343,7 +400,7 @@ static void open_socket(const char *address, void *conn_context,
   }
 
   msg_Event event = for_listening ? msg_listening : msg_connection_ready;
-  send_callback(conn, event, msg_no_data);
+  send_callback(conn, event, msg_no_data, NULL);
 }
 
 
@@ -388,11 +445,11 @@ void msg_runloop(int timeout_in_ms) {
   // Save the state of pending callbacks so that users can add new callbacks
   // from within their callbacks.
   CArray saved_immediate_callbacks = immediate_callbacks;
-  immediate_callbacks = CArrayNew(16, sizeof(PendingCallback));
+  immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
 
-  CArrayFor(PendingCallback *, call, saved_immediate_callbacks) {
+  CArrayFor(PendingCall *, call, saved_immediate_callbacks) {
     call->conn->callback(call->conn, call->event, call->data);
-    if (call->free_after_call) free(call->free_after_call);
+    if (call->to_free) free(call->to_free);
   }
 
   // TODO free data from called callbacks
@@ -460,7 +517,7 @@ msg_Data msg_new_data(const char *str) {
 }
 
 msg_Data msg_new_data_space(size_t num_bytes) {
-  msg_Data data = {num_bytes, malloc(num_bytes + header_len)};
+  msg_Data data = {.num_bytes = num_bytes, .bytes = malloc(num_bytes + header_len)};
   data.bytes += header_len;
   return data;
 }
@@ -479,4 +536,3 @@ msg_Data msg_no_data = {0, NULL};
 
 const int msg_tcp = SOCK_STREAM;
 const int msg_udp = SOCK_DGRAM;
-

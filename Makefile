@@ -16,7 +16,7 @@
 
 # Target lists.
 tests = out/msgbox_test
-common_obj = $(addprefix out/,CArray.o memprofile.o)
+common_obj = $(addprefix out/,CArray.o CList.o CMap.o memprofile.o)
 release_obj = out/msgbox.o $(common_obj)
 test_obj = out/msgbox_debug.o out/ctest.o $(common_obj)
 examples =
