@@ -284,6 +284,7 @@ static void remote_address_seen(msg_Conn *conn, struct sockaddr_in *sockaddr) {
     ConnStatus *status = malloc(sizeof(ConnStatus));
     status->last_seen_at = 0.0;  // TODO Populate with the real time.
     CMapSet(conn_status, address, status);
+    send_callback(conn, msg_connection_ready, msg_no_data, NULL);
   }
 }
 
@@ -321,6 +322,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     msg_Data data = {bytes_recvd - header_len, buffer + header_len};
     strcpy(conn->remote_ip, inet_ntoa(remote_sockaddr.sin_addr));
     conn->remote_port = ntohs(remote_sockaddr.sin_port);
+    remote_address_seen(conn, &remote_sockaddr);
 
     send_callback(conn, event, data, NULL);
 

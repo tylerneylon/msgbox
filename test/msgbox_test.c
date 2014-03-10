@@ -47,7 +47,7 @@ void udp_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
       server_done = 1;
       break;
     default:
-      test_failed();
+      test_failed("Unexpected event (%d) in %s.", event, __func__);
   }
   event_num++;
 }
@@ -86,18 +86,24 @@ void udp_client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
       client_done = 1;
       break;
     default:
-      test_failed();
+      test_failed("Unexpected event (%d) in %s.", event, __func__);
   }
   event_num++;
 }
 
-int udp_client() {
+int udp_client(pid_t server_pid) {
   // Sleep for 1ms to give the server time to start.
   usleep(1000);
 
   msg_connect("udp://127.0.0.1:1234", msg_no_context, udp_client_update);
   int timeout_in_ms = 10;
-  while (!client_done) msg_runloop(timeout_in_ms);
+  while (!client_done) {
+    msg_runloop(timeout_in_ms);
+
+    // Check to see if the server process ended before we expected it to.
+    int status;
+    if (!client_done && waitpid(server_pid, &status, WNOHANG)) return test_failure;
+  }
 
   return test_success;
 }
@@ -112,13 +118,14 @@ int udp_test() {
     exit(udp_server());
   } else {
     // Parent process.
-    int client_failed = udp_client();
-    int server_failed;
-    wait(&server_failed);
-    
+    int client_failed = udp_client(child_pid);
+    int server_status;
+    wait(&server_status);
+    int server_failed = WEXITSTATUS(server_status);
+
     // TODO Check for memory leaks.
     //printmeminfo();
-  
+
     return client_failed || server_failed;
   }
 }

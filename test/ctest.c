@@ -38,7 +38,7 @@ static void print_trace() {
 
 static void handle_seg_fault(int sig) {
   print_trace();
-  test_failed();
+  test_failed("Received signal %d %s", sig, sig == SIGSEGV ? "(SIGSEGV)" : "");
 }
 
 ////////////////////////////////////////////////////////
@@ -65,7 +65,7 @@ void run_test_(TestFunction test_fn, char *new_test_name) {
   log[0] = '\0';
   log_cursor = log;
   test_name = new_test_name;
-  if(test_fn() != test_success) test_failed();
+  if(test_fn() != test_success) test_failed("Test returned with failed status.");
 }
 
 void run_tests_(char *test_names, ...) {
@@ -114,17 +114,25 @@ void test_that_(int cond, char *cond_str, char *filename, int line_number) {
   if (cond) return;
   test_printf("%s:%d: ", basename(filename), line_number);
   test_printf("The following condition failed: %s\n", cond_str);
-  test_failed();
+  test_failed("");
 }
 
-void test_failed() {
+void test_failed(char *reason_fmt, ...) {
   if (!log_is_verbose) {
     // If log_is_verbose, then the log is already printed out by now.
-    printf("\r%s - failed \n", program_name);
+    printf("\r%s - failed \n\n", program_name);
     printf("Failed in test '%s'; log follows:\n---\n", test_name);
     printf("%s\n---\n", log);
   }
-  printf("%s failed while running test %s.\n", program_name, test_name);
+  if (reason_fmt && strlen(reason_fmt)) {
+    va_list args;
+    va_start(args, reason_fmt);
+    char *fmt = alloca(strlen(reason_fmt) + 3);  // 3 chars for \, n, and \0.
+    sprintf(fmt, "%s\n", reason_fmt);
+    vprintf(fmt, args);
+    va_end(args);
+  }
+  printf("%s failed while running test %s.\n\n", program_name, test_name);
   exit(test_failure);
 }
 
