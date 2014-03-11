@@ -5,7 +5,9 @@
 
 #include "CArray.h"
 
+#ifdef DEBUG
 #include "memprofile.h"
+#endif
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -135,7 +137,7 @@ int CustomCompare(const void *elt1, const void *elt2) {
 void CArraySort(CArray cArray, CompareFunction compare, void *compareContext) {
   CompareFn oldCompare = userCompare;
   void *oldContext = userContext;
-  
+
   if (compare == NULL) {
     userCompare = CompareAsInts;
     userContext = &(cArray->elementSize);
