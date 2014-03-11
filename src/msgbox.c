@@ -489,6 +489,13 @@ static void open_socket(const char *address, void *conn_context,
   }
 
   if (for_listening) {
+    if (conn->protocol_type == msg_tcp) {
+      ret_val = listen(conn->socket, SOMAXCONN);
+      if (ret_val == -1) {
+        send_callback_os_error(conn, "listen", conn);
+        return remove_last_polling_conn();
+      }
+    }
     send_callback(conn, msg_listening, msg_no_data, NULL);
   } else {
     remote_address_seen(conn, sockaddr);  // Sends the msg_connection_ready event.
