@@ -75,6 +75,13 @@ typedef struct {
 //
 // **. When we receive a request, ensure that next_reply_id is above its reply_id.
 //
+// **. Avoid blocking in sendall; instead cache data that needs to be sent and
+//     dole it out from the run loop. In practice, I can track how often this ends up
+//     as a problem (maybe how often send returns 0) and use that to prioritize things.
+//
+// **. Check for error return values from send/sendto in all cases. That check is missing
+//     at very least in msg_send.
+//
 
 static CArray immediate_callbacks = NULL;
 
@@ -612,6 +619,13 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   set_header(data, msg_type, num_packets, packet_id, conn->reply_id);
 
   int default_options = 0;
+
+  if (conn->protocol_type == msg_tcp) {
+    int ret_val = sendall(conn->socket, data);
+    if (ret_val == -1) send_callback_os_error(conn, "send", NULL);
+    return;
+  }
+
   if (conn->protocol_type == msg_udp && conn->for_listening) {
     struct sockaddr_in sockaddr;
     char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
