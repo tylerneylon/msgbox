@@ -47,8 +47,8 @@ typedef struct msg_Conn {
   void *reply_context;
   msg_Callback callback;
 
-  uint32_t remote_ip;
-  uint16_t remote_port;
+  uint32_t remote_ip;      // Network byte-order.
+  uint16_t remote_port;    // Host byte-order.
   uint16_t protocol_type;  // Valid values are msg_tcp or msg_udp.
 
   int socket;

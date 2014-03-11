@@ -70,6 +70,10 @@ typedef struct {
 //
 // **. Make the address info in msg_Conn an official Address object.
 //
+// **. Add timeouts for msg_get.
+//
+// **. When we receive a request, ensure that next_reply_id is above its reply_id.
+//
 
 static CArray immediate_callbacks = NULL;
 
@@ -105,10 +109,23 @@ static const uint16_t max_reply_id = (1 << 15) - 1;  // = bits:01..1 with 15 one
 //  Connection status map.
 
 typedef struct {
-  uint32_t ip;
-  uint16_t port;
+  uint32_t ip;  // Stored in network byte-order.
+  uint16_t port;  // Stored in host byte-order.
   uint16_t protocol_type;
 } Address;
+
+Address *address_of_conn(msg_Conn *conn) {
+  return (Address *)(&conn->remote_ip);
+}
+
+char *address_as_str(Address *address) {
+  struct in_addr in;
+  in.s_addr = address->ip;
+  static char address_str[32];
+  char *protocol = address->protocol_type == msg_udp ? "udp" : "tcp";
+  snprintf(address_str, 32, "%s://%s:%d", protocol, inet_ntoa(in), address->port);
+  return address_str;
+}
 
 int address_hash(void *address) {
   char *bytes = (char *)address;
@@ -124,15 +141,49 @@ int address_eq(void *addr1, void *addr2) {
   return memcmp(addr1, addr2, sizeof(Address)) == 0;
 }
 
+int reply_id_hash(void *reply_id) {
+  return (int)reply_id;
+}
+
+int reply_id_eq(void *reply_id1, void *reply_id2) {
+  uint16_t id1 = (uint16_t)reply_id1;
+  uint16_t id2 = (uint16_t)reply_id2;
+  return id1 == id2;
+}
+
 typedef struct {
   double last_seen_at;
+  CMap reply_contexts;  // Map reply_id -> reply_context.
+  uint16_t next_reply_id;
 } ConnStatus;
+
+ConnStatus *new_conn_status(double now) {
+  ConnStatus *status = malloc(sizeof(ConnStatus));
+  status->last_seen_at = now;
+  status->reply_contexts = CMapNew(reply_id_hash, reply_id_eq);
+  status->next_reply_id = 1;
+  return status;
+}
+
+void delete_conn_status(void *status_v_ptr) {
+  ConnStatus *status = (ConnStatus *)status_v_ptr;
+  // This should be empty since we need to give the user a chance to free all contexts.
+  assert(status->reply_contexts->count == 0);
+  CMapDelete(status->reply_contexts);
+}
 
 // This maps Address -> ConnStatus.
 // The actual keys & values are pointers to those types,
 // and the releasers free them.
 // TODO Once out_beats is added, let out_beats own the ConnStatus objects.
 static CMap conn_status = NULL;
+
+// Returns NULL if the given remote address has no associated status.
+ConnStatus *status_of_conn(msg_Conn *conn) {
+  Address *address = (Address *)(&conn->remote_ip);
+  KeyValuePair *pair = CMapFind(conn_status, address);
+  return pair ? (ConnStatus *)pair->value : NULL;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Internal functions.
@@ -156,7 +207,7 @@ static void init_if_needed() {
 
   conn_status = CMapNew(address_hash, address_eq);
   conn_status->keyReleaser = free;
-  conn_status->valueReleaser = free;
+  conn_status->valueReleaser = delete_conn_status;
 
   init_done = true;
 }
@@ -275,30 +326,35 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     send_callback_os_error(conn, "recv", NULL);
     return false;
   }
+
   // Convert each field from network to host byte ordering.
   static const size_t num_shorts = header_len / sizeof(uint16_t);
   for (int i = 0; i < num_shorts; ++i) buffer[i] = ntohs(buffer[i]);
   conn->reply_id = header->reply_id;
+
   return true;
 }
 
-static void remote_address_seen(msg_Conn *conn, struct sockaddr_in *sockaddr) {
+static ConnStatus *remote_address_seen(msg_Conn *conn, struct sockaddr_in *sockaddr) {
   Address *address = malloc(sizeof(Address));
   address->ip = sockaddr->sin_addr.s_addr;
   address->port = conn->remote_port;
   address->protocol_type = conn->protocol_type;
 
   KeyValuePair *pair;
+  ConnStatus *status;
   if ((pair = CMapFind(conn_status, address))) {
     // TODO Update the timing data for this remote address.
     free(address);
+    status = (ConnStatus *)pair->value;
   } else {
     // It's a new remote address; conn_status takes ownership of address.
-    ConnStatus *status = malloc(sizeof(ConnStatus));
-    status->last_seen_at = 0.0;  // TODO Populate with the real time.
+    status = new_conn_status(0.0 /* TODO set to now */);
     CMapSet(conn_status, address, status);
     send_callback(conn, msg_connection_ready, msg_no_data, NULL);
   }
+
+  return status;
 }
 
 // Drops the conn from conn_status and sends msg_connection_closed.
@@ -311,7 +367,6 @@ static void local_disconnect(msg_Conn *conn) {
 }
 
 static void read_from_socket(int sock, msg_Conn *conn) {
-  //printf("%s(%d, %p)\n", __func__, sock, conn);
   Header header;
   if (!read_header(sock, conn, &header)) return;
 
@@ -349,27 +404,27 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       return local_disconnect(conn);
   }
 
-  if (header.num_packets == 1) {
-    char *buffer = malloc(recv_buffer_len);
-    int default_options = 0;
-    struct sockaddr_in remote_sockaddr;
-    socklen_t remote_sockaddr_size = sock_in_size;
-    ssize_t bytes_recvd = recvfrom(sock, buffer, recv_buffer_len, default_options,
-        (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
+  char *buffer = malloc(recv_buffer_len);
+  int default_options = 0;
+  struct sockaddr_in remote_sockaddr;
+  socklen_t remote_sockaddr_size = sock_in_size;
+  ssize_t bytes_recvd = recvfrom(sock, buffer, recv_buffer_len, default_options,
+      (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
-    if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
+  if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
 
-    msg_Data data = {bytes_recvd - header_len, buffer + header_len};
-    conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
-    conn->remote_port = ntohs(remote_sockaddr.sin_port);
-    remote_address_seen(conn, &remote_sockaddr);
+  msg_Data data = { .num_bytes = bytes_recvd - header_len, .bytes = buffer + header_len};
+  conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
+  conn->remote_port = ntohs(remote_sockaddr.sin_port);
+  ConnStatus *status = remote_address_seen(conn, &remote_sockaddr);
 
-    send_callback(conn, event, data, NULL);
-
-  } else {
-    // TODO Handle the multi-packet case.
-    assert(0);
+  if (header.message_type == msg_type_reply) {
+    KeyValuePair *pair = CMapFind(status->reply_contexts, (void *)(intptr_t)header.reply_id);
+    if (pair == NULL) return send_callback_error(conn, "Unrecognized reply_id", buffer);
+    conn->reply_context = pair->value;
   }
+
+  send_callback(conn, event, data, NULL);
 }
 
 static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
@@ -447,18 +502,6 @@ static void open_socket(const char *address, void *conn_context,
 void msg_runloop(int timeout_in_ms) {
   nfds_t num_fds = poll_fds->count;
 
-  // TEMP
-  static int num_prints = 0;
-  if (num_prints < 3) {
-    //printf("About to call poll.\n");
-    //printf("num_fds=%d\n", num_fds);
-    if (num_fds > 0) {
-      struct pollfd *pfd = (struct pollfd *)poll_fds->elements;
-      //printf("first fd=%d\n", pfd->fd);
-    }
-    num_prints++;
-  }
-
   int ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
 
   if (ret == -1) {
@@ -523,29 +566,49 @@ void msg_disconnect(msg_Conn *conn) {
 }
 
 void msg_send(msg_Conn *conn, msg_Data data) {
-  //printf("%s: '%s'\n", __func__, msg_as_str(data));
-
   // Set up the header.
-  int num_packets = 1, packet_id = 0, reply_id = 0;
-  set_header(data, msg_type_one_way, num_packets, packet_id, reply_id);
-  // TODO Be able to handle multi-packet data.
+  int num_packets = 1, packet_id = 0;
+  int msg_type = conn->reply_id ? msg_type_reply : msg_type_one_way;
+  set_header(data, msg_type, num_packets, packet_id, conn->reply_id);
 
   int default_options = 0;
-  //printf("protocol_type=%d for_listening=%d.\n", conn->protocol_type, conn->for_listening);
   if (conn->protocol_type == msg_udp && conn->for_listening) {
-    //printf("Using sendto.\n");
     struct sockaddr_in sockaddr;
     char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
     if (err_msg) return send_callback_error(conn, err_msg, NULL);
     sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sock_in_size);
   } else {
-    //printf("Using send.\n");
     send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
   }
 }
 
+// TODO Refactor between msg_send and msg_get.
 void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
+  // Look up the next reply id.
+  ConnStatus *status = status_of_conn(conn);
+  if (status == NULL) {
+    static char err_msg[1024];
+    snprintf(err_msg, 1024, "No known connection with %s", address_as_str(address_of_conn(conn)));
+    return send_callback_error(conn, err_msg, NULL);
+  }
+  int reply_id = status->next_reply_id++;
+  CMapSet(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
+
+  // Set up the header.
+  int num_packets = 1, packet_id = 0;
+  set_header(data, msg_type_request, num_packets, packet_id, reply_id);
+
+  int default_options = 0;
+  if (conn->protocol_type == msg_udp && conn->for_listening) {
+    struct sockaddr_in sockaddr;
+    char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
+    if (err_msg) return send_callback_error(conn, err_msg, NULL);
+    sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
+        (struct sockaddr *)&sockaddr, sock_in_size);
+  } else {
+    send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
+  }
 }
 
 char *msg_as_str(msg_Data data) {

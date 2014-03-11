@@ -19,7 +19,7 @@ tests = out/msgbox_test
 release_obj = $(addprefix out/,msgbox.o CArray.o CList.o CMap.o)
 debug_obj= $(addprefix out/debug_,msgbox.o CArray.o CList.o CMap.o)
 test_obj = out/ctest.o out/memprofile.o $(debug_obj)
-examples =
+examples = $(addprefix out/,udp_echo_server udp_echo_client)
 
 # Variables for build settings.
 includes = -Isrc
@@ -70,7 +70,7 @@ out/%.o : src/%.c src/%.h | out
 $(tests) : out/% : test/%.c $(test_obj)
 	$(cc) -o $@ $^
 
-$(examples) : out/% : examples/%.c $(obj)
+$(examples) : out/% : examples/%.c out/libmsgbox.a
 	$(cc) -o $@ $^
 
 # Listing this special-name rule prevents the deletion of intermediate files.
