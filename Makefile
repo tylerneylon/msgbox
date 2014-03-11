@@ -16,9 +16,9 @@
 
 # Target lists.
 tests = out/msgbox_test
-common_obj = $(addprefix out/,CArray.o CList.o CMap.o memprofile.o)
-release_obj = out/msgbox.o $(common_obj)
-test_obj = out/msgbox_debug.o out/ctest.o $(common_obj)
+release_obj = $(addprefix out/,msgbox.o CArray.o CList.o CMap.o)
+debug_obj= $(addprefix out/debug_,msgbox.o CArray.o CList.o CMap.o)
+test_obj = out/ctest.o out/memprofile.o $(debug_obj)
 examples =
 
 # Variables for build settings.
@@ -58,8 +58,14 @@ out:
 out/ctest.o: test/ctest.c test/ctest.h | out
 	$(cc) -o out/ctest.o -c test/ctest.c
 
-out/msgbox_debug.o: src/msgbox.h src/msgbox.c | out
-	$(cc) -o out/msgbox_debug.o -c src/msgbox.c -DDEBUG
+#$(debug_obj) : out/%_debug.o : src/%.h src/%.c
+#	$(cc) -o %@ -c %< -DDEBUG
+
+#out/msgbox_debug.o: src/msgbox.h src/msgbox.c | out
+#	$(cc) -o out/msgbox_debug.o -c src/msgbox.c -DDEBUG
+
+out/debug_%.o : src/%.c src/%.h | out
+	$(cc) -o $@ -c $< -DDEBUG
 
 out/%.o : src/%.c src/%.h | out
 	$(cc) -o $@ -c $<
