@@ -56,19 +56,19 @@ out:
 	mkdir -p out
 
 out/ctest.o: test/ctest.c test/ctest.h | out
-	$(cc) -o out/ctest.o -c test/ctest.c
+	$(cc) -o out/ctest.o -g -c test/ctest.c
 
 out/libmsgbox.a: $(release_obj)
 	ar cr $@ $^
 
 out/debug_%.o : src/%.c src/%.h | out
-	$(cc) -o $@ -c $< -DDEBUG
+	$(cc) -o $@ -g -c $< -DDEBUG
 
 out/%.o : src/%.c src/%.h | out
 	$(cc) -o $@ -c $<
 
 $(tests) : out/% : test/%.c $(test_obj)
-	$(cc) -o $@ $^
+	$(cc) -o $@ -g $^
 
 $(examples) : out/% : examples/%.c out/libmsgbox.a
 	$(cc) -o $@ $^

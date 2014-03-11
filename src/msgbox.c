@@ -361,11 +361,12 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
   ConnStatus *status;
   if ((pair = CMapFind(conn_status, address))) {
     // TODO Update the timing data for this remote address.
-    free(address);
     status = (ConnStatus *)pair->value;
   } else {
     // It's a new remote address; conn_status takes ownership of address.
     status = new_conn_status(0.0 /* TODO set to now */);
+    address = malloc(sizeof(Address));
+    *address = *address_of_conn(conn);
     CMapSet(conn_status, address, status);
     send_callback(conn, msg_connection_ready, msg_no_data, NULL);
   }
