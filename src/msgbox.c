@@ -189,6 +189,18 @@ ConnStatus *status_of_conn(msg_Conn *conn) {
 ///////////////////////////////////////////////////////////////////////////////
 //  Internal functions.
 
+// Returns -1 on error; 0 on success, similar to a system call.
+int sendall(int socket, msg_Data data) {
+  while (data.num_bytes > 0) {
+    int default_send_options = 0;
+    int just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
+    if (just_sent == -1) return -1;
+    data.bytes += just_sent;
+    data.num_bytes -= just_sent;
+  }
+  return 0;
+}
+
 void CArrayRemoveLast(CArray array) {
   CArrayRemoveElement(array, CArrayElement(array, array->count - 1));
 }
