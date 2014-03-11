@@ -33,7 +33,7 @@ testenv = DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib MALLOC_LOG_FILE=/dev/n
 # Primary rules; meant to be used directly.
 
 # Build everything.
-all: $(release_obj) $(tests) $(examples)
+all: out/libmsgbox.a $(release_obj) $(tests) $(examples)
 
 # Build all tests.
 test: $(tests)
@@ -58,11 +58,8 @@ out:
 out/ctest.o: test/ctest.c test/ctest.h | out
 	$(cc) -o out/ctest.o -c test/ctest.c
 
-#$(debug_obj) : out/%_debug.o : src/%.h src/%.c
-#	$(cc) -o %@ -c %< -DDEBUG
-
-#out/msgbox_debug.o: src/msgbox.h src/msgbox.c | out
-#	$(cc) -o out/msgbox_debug.o -c src/msgbox.c -DDEBUG
+out/libmsgbox.a: $(release_obj)
+	ar cr $@ $^
 
 out/debug_%.o : src/%.c src/%.h | out
 	$(cc) -o $@ -c $< -DDEBUG
