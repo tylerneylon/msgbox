@@ -6,6 +6,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
@@ -335,12 +336,8 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   return true;
 }
 
-static ConnStatus *remote_address_seen(msg_Conn *conn, struct sockaddr_in *sockaddr) {
-  Address *address = malloc(sizeof(Address));
-  address->ip = sockaddr->sin_addr.s_addr;
-  address->port = conn->remote_port;
-  address->protocol_type = conn->protocol_type;
-
+static ConnStatus *remote_address_seen(msg_Conn *conn) {
+  Address *address = address_of_conn(conn);
   KeyValuePair *pair;
   ConnStatus *status;
   if ((pair = CMapFind(conn_status, address))) {
@@ -416,7 +413,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
   msg_Data data = { .num_bytes = bytes_recvd - header_len, .bytes = buffer + header_len};
   conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
   conn->remote_port = ntohs(remote_sockaddr.sin_port);
-  ConnStatus *status = remote_address_seen(conn, &remote_sockaddr);
+  ConnStatus *status = remote_address_seen(conn);
 
   if (header.message_type == msg_type_reply) {
     KeyValuePair *pair = CMapFind(status->reply_contexts, (void *)(intptr_t)header.reply_id);
@@ -481,10 +478,29 @@ static void open_socket(const char *address, void *conn_context,
   struct sockaddr_in *sockaddr = alloca(sock_in_size);
   if (!setup_sockaddr(sockaddr, address, conn)) return;  // Error; setup_sockaddr now owns conn.
 
-  SocketOpener sys_open_sock = for_listening ? bind : connect;
-  int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
+  // Make the socket non-blocking so a connect call won't block.
+  int flags = fcntl(conn->socket, F_GETFL, 0);
+  if (flags == -1) {
+    send_callback_os_error(conn, "fcntl", conn);
+    return remove_last_polling_conn();
+  }
+  int ret_val = fcntl(conn->socket, F_SETFL, flags | O_NONBLOCK);
   if (ret_val == -1) {
-    send_callback_os_error(conn, "bind", conn);
+    send_callback_os_error(conn, "fcntl", conn);
+    return remove_last_polling_conn();
+  }
+
+  char *sys_call_name = for_listening ? "bind" : "connect";
+  SocketOpener sys_open_sock = for_listening ? bind : connect;
+  ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
+  if (ret_val == -1) {
+    if (!for_listening && conn->protocol_type == msg_tcp && errno == EINPROGRESS) {
+      // The EINPROGRESS error is ok; in that case we'll send msg_connection_ready later.
+      struct pollfd *poll_fd = CArrayElement(poll_fds, poll_fds->count - 1);
+      poll_fd->events = POLLOUT;
+      return;
+    }
+    send_callback_os_error(conn, sys_call_name, conn);
     return remove_last_polling_conn();
   }
 
@@ -498,7 +514,7 @@ static void open_socket(const char *address, void *conn_context,
     }
     send_callback(conn, msg_listening, msg_no_data, NULL);
   } else {
-    remote_address_seen(conn, sockaddr);  // Sends the msg_connection_ready event.
+    remote_address_seen(conn);  // Sends the msg_connection_ready event.
   }
 }
 
@@ -522,10 +538,15 @@ void msg_runloop(int timeout_in_ms) {
     // Otherwise errno is EAGAIN or EINTR, both non-critical.
   } else if (ret > 0) {
     CArrayFor(struct pollfd *, poll_fd, poll_fds) {
-      if (!(poll_fd->revents & POLLIN)) continue;
+      if (poll_fd->revents == 0) continue;
       int index = CArrayIndexOf(poll_fds, poll_fd);
       msg_Conn *conn = CArrayElementOfType(conns, index, msg_Conn *);
-      read_from_socket(poll_fd->fd, conn);
+      if (poll_fd->revents & POLLOUT) {
+        // We only listen for this event when waiting for a tcp connect to complete.
+        remote_address_seen(conn);  // Sends msg_connection_ready.
+        poll_fd->events = POLLIN;
+      }
+      if (poll_fd->revents & POLLIN) read_from_socket(poll_fd->fd, conn);
     }
   }
 
