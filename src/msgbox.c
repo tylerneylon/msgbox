@@ -73,7 +73,7 @@ typedef struct {
 //
 // **. When we receive a request, ensure that next_reply_id is above its reply_id.
 //
-// **. Avoid blocking in sendall; instead cache data that needs to be sent and
+// **. Avoid blocking in send_all; instead cache data that needs to be sent and
 //     dole it out from the run loop. In practice, I can track how often this ends up
 //     as a problem (maybe how often send returns 0) and use that to prioritize things.
 //
@@ -83,6 +83,8 @@ typedef struct {
 // **. Encapsulate all references to header_len.
 //
 // **. Clean up use of num_bytes in the header for udp, as it is not used consistently now.
+//
+// **. Encapsulate out all the msg_Data handling. There's too much coupling with it now.
 //
 
 static CArray immediate_callbacks = NULL;
@@ -217,8 +219,24 @@ ConnStatus *status_of_conn(msg_Conn *conn) {
 ///////////////////////////////////////////////////////////////////////////////
 //  Internal functions.
 
+// DEBUG
+static void print_bytes(char *bytes, size_t num_to_print) {
+  printf("bytes (%zd) :", num_to_print);
+  for (int i = 0; i < num_to_print; ++i) {
+    printf(" 0x%02X", bytes[i]);
+  }
+  printf("\n");
+}
+
 // Returns -1 on error; 0 on success, similar to a system call.
-int sendall(int socket, msg_Data data) {
+static int send_all(int socket, msg_Data data) {
+  data.bytes -= header_len;
+  data.num_bytes += header_len;
+
+  // DEBUG
+  size_t orig_size = data.num_bytes;
+  char *orig_bytes = data.bytes;
+
   while (data.num_bytes > 0) {
     int default_send_options = 0;
     int just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
@@ -226,16 +244,30 @@ int sendall(int socket, msg_Data data) {
     data.bytes += just_sent;
     data.num_bytes -= just_sent;
   }
+
+  if (0) {
+    printf("Just sent over the ");
+    print_bytes(orig_bytes, orig_size);
+  }
+
   return 0;
 }
 
-void CArrayRemoveLast(CArray array) {
+static void CArrayRemoveLast(CArray array) {
   CArrayRemoveElement(array, CArrayElement(array, array->count - 1));
 }
 
-void remove_last_polling_conn() {
+static void remove_last_polling_conn() {
   CArrayRemoveLast(conns);
   CArrayRemoveLast(poll_fds);
+}
+
+static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
+  msg_Conn *conn = malloc(sizeof(msg_Conn));
+  memset(conn, 0, sizeof(msg_Conn));
+  conn->conn_context = conn_context;
+  conn->callback = callback;
+  return conn;
 }
 
 static void init_if_needed() {
@@ -362,16 +394,28 @@ static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_bytes,
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
   uint16_t *buffer = (uint16_t *)header;
-  ssize_t bytes_recvd = recv(sock, buffer, header_len, MSG_PEEK);
+  int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
+  ssize_t bytes_recvd = recv(sock, buffer, header_len, options);
   if (bytes_recvd == -1) {
     send_callback_os_error(conn, "recv", NULL);
     return false;
+  }
+
+  // TODO Handle the case of receiving 0 bytes = remote connection closed.
+  if (bytes_recvd == 0) {
+    printf("\nRemote connection closed!\n");
+    exit(22);  // random status for now
   }
 
   // Convert each field from network to host byte ordering.
   static const size_t num_shorts = header_len / sizeof(uint16_t);
   for (int i = 0; i < num_shorts; ++i) buffer[i] = ntohs(buffer[i]);
   conn->reply_id = header->reply_id;
+
+  if (0) {
+    printf("%s called; header has ", __func__);
+    print_bytes((char *)header, sizeof(Header));
+  }
 
   return true;
 }
@@ -416,6 +460,7 @@ static int continue_recv(int sock, ConnStatus *status) {
   return buffer->num_bytes == 0;
 }
 
+// TODO Make this function shorter or break it up.
 static void read_from_socket(int sock, msg_Conn *conn) {
   ConnStatus *status = NULL;
   Header *header = NULL;
@@ -423,12 +468,40 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
   // Read in any tcp data.
   if (conn->protocol_type == msg_tcp) {
+
+    if (conn->for_listening) {
+
+      // Accept a new incoming connection.
+      struct sockaddr_in remote_addr;
+      socklen_t addr_len = sizeof(remote_addr);
+      int new_sock = accept(conn->socket, (struct sockaddr *)&remote_addr, &addr_len);
+      if (new_sock == -1) return send_callback_os_error(conn, "accept", NULL);
+
+      msg_Conn *new_conn = new_connection(conn->conn_context, conn->callback);
+      new_conn->socket = new_sock;
+      new_conn->remote_ip = remote_addr.sin_addr.s_addr;
+      new_conn->remote_port = ntohs(remote_addr.sin_port);
+      new_conn->protocol_type = conn->protocol_type;
+      CArrayAddElement(conns, new_conn);
+
+      struct pollfd *new_poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
+      new_poll_fd->fd = new_sock;
+      new_poll_fd->events = POLLIN;
+
+      remote_address_seen(new_conn);  // Sets up a ConnStatus and sends msg_connection_ready.
+      return;
+    }
+
     status = remote_address_seen(conn);
     if (status->waiting_buffer.num_bytes == 0) {
+
       // Begin a new recv.
+      header = alloca(sizeof(Header));
       if (!read_header(sock, conn, header)) return;
       new_conn_status_buffer(status, header);
     } else {
+
+      // Load header from the buffer we'll continue.
       header = (Header *)(status->total_buffer.bytes - header_len);
     }
     int ret_val = continue_recv(conn->socket, status);
@@ -438,6 +511,12 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     }
     if (ret_val == false) return;  // It will finish later.
     data = status->total_buffer;
+
+    if (0) {
+      printf("After continue_recv, data has ");
+      print_bytes(data.bytes, data.num_bytes);
+    }
+
     status->total_buffer = status->waiting_buffer = (msg_Data) { .num_bytes = 0, .bytes = NULL };
 
   } else {
@@ -506,25 +585,25 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       return send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
     }
     conn->reply_context = pair->value;
+  } else {
+    conn->reply_context = NULL;
   }
 
   send_callback(conn, event, data, NULL);
-}
-
-static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
-  msg_Conn *conn = malloc(sizeof(msg_Conn));
-  memset(conn, 0, sizeof(msg_Conn));
-  conn->conn_context = conn_context;
-  conn->callback = callback;
-  return conn;
 }
 
 // Sets up sockaddr based on address. If an error occurs, the error callback
 // is scheduled.  Returns true on success.
 // conn and its polling fd are added the polling conns arrays on success.
 static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg_Conn *conn) {
+  const char *err_msg = parse_address_str(address, conn);
+  if (err_msg) {
+    send_callback_error(conn, err_msg, conn);
+    return false;
+  }
+
   int use_default_protocol = 0;
-  int sock = socket(AF_INET, SOCK_DGRAM, use_default_protocol);
+  int sock = socket(AF_INET, conn->protocol_type, use_default_protocol);
   if (sock == -1) {
     send_callback_os_error(conn, "socket", conn);
     return false;
@@ -537,13 +616,6 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   struct pollfd *poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
   poll_fd->fd = sock;
   poll_fd->events = POLLIN;
-
-  const char *err_msg = parse_address_str(address, conn);
-  if (err_msg != no_error) {
-    remove_last_polling_conn();
-    send_callback_error(conn, err_msg, conn);
-    return false;
-  }
 
   // Initialize the sockaddr_in struct.
   memset(sockaddr, 0, sock_in_size);
@@ -689,7 +761,7 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   int default_options = 0;
 
   if (conn->protocol_type == msg_tcp) {
-    int ret_val = sendall(conn->socket, data);
+    int ret_val = send_all(conn->socket, data);
     if (ret_val == -1) send_callback_os_error(conn, "send", NULL);
     return;
   }
