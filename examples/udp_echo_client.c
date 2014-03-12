@@ -24,7 +24,9 @@ static char *event_names[] = {
 };
 
 void update(msg_Conn *conn, msg_Event event, msg_Data data) {
+
   printf("Client: received event %s.\n", event_names[event]);
+
   if (event == msg_error) printf("Client: error: %s.\n", msg_as_str(data));
 
   if (event == msg_connection_ready) {
@@ -45,6 +47,7 @@ void update(msg_Conn *conn, msg_Event event, msg_Data data) {
     printf("Client: message is '%s'.\n", msg_as_str(data));
     printf("Client: reply_context is '%s'.\n",
         conn->reply_context ? conn->reply_context : "<null>");
+
     msg_disconnect(conn);
     done = true;
   }

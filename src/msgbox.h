@@ -9,6 +9,8 @@
 //   You could listen on "tcp://*:8100".
 //   You could connect to "udp://1.2.3.4:8200".
 //
+// See the examples directory for basic usage examples.
+//
 
 #ifndef __MSG_MSGBOX_H__
 #define __MSG_MSGBOX_H__
@@ -18,10 +20,8 @@
 
 // Type definitions.
 
-// Always allocate and deallocate these using the
-// msg_{new,delete}_data* functions below; this is
-// important because bytes points *into* a buffer with
-// extra starting space for headers.
+// Allocate and deallocate msg_Data using the msg_{new,delete}_data* functions below.
+// That's needed since bytes points *into* a buffer with preamble space for headers.
 typedef struct {
   size_t num_bytes;
   char *bytes;
@@ -69,15 +69,14 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
 void msg_unlisten(msg_Conn *conn);
 void msg_disconnect(msg_Conn *conn);
 
-// Calls to send a message. Call get when you expect a reply; otherwise call send.
+// Calls to send a message. Call msg_get when you expect a reply; otherwise call msg_send.
 
 void msg_send(msg_Conn *conn, msg_Data data);
 void msg_get(msg_Conn *conn, msg_Data data, void *reply_context);
 
 // Functions for working with msg_Data.
 
-char *msg_as_str(msg_Data data);
-
+char *msg_as_str(msg_Data data);  // Assumes the underlying data is a C string.
 msg_Data msg_new_data(const char *str);
 msg_Data msg_new_data_space(size_t num_bytes);
 void msg_delete_data(msg_Data data);

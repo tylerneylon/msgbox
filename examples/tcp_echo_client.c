@@ -1,13 +1,11 @@
 // tcp_echo_client.c
 //
-// A client that sends a one-way message and then a request. TODO Update these comments.
+// A client that sends a one-way message and then a request.
 //
 
 #include "msgbox.h"
 
 #include <stdio.h>
-
-int net_allocs_for_class(int class);
 
 #define true 1
 #define false 0
@@ -26,7 +24,9 @@ static char *event_names[] = {
 };
 
 void update(msg_Conn *conn, msg_Event event, msg_Data data) {
+
   printf("Client: received event %s.\n", event_names[event]);
+
   if (event == msg_error) printf("Client: error: %s.\n", msg_as_str(data));
 
   if (event == msg_connection_ready) {

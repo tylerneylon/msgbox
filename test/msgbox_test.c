@@ -107,8 +107,6 @@ int server(int protocol_type) {
 int client_done;
 int client_event_num;
 
-// TODO test message values here and above.
-
 void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
   // We expect to hear events in this order:
@@ -189,8 +187,7 @@ int basic_test(int protocol_type) {
     // Help check for memory leaks.
     test_that(net_allocs_for_class(0) == 0);
 
-    // TODO Add deeper memory-leak checks to memprofile.
-    //printmeminfo();
+    // TODO Add deeper memory-leak checks via memprofile.
 
     test_printf("Test: client_failed=%d server_failed=%d.\n", client_failed, server_failed);
 

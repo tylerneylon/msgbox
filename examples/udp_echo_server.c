@@ -25,7 +25,9 @@ static char *event_names[] = {
 };
 
 void update(msg_Conn *conn, msg_Event event, msg_Data data) {
+
   printf("Server: received event %s.\n", event_names[event]);
+
   if (event == msg_error) printf("Server: error: %s.\n", msg_as_str(data));
 
   if (event == msg_message || event == msg_request) {

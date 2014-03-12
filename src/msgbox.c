@@ -1,3 +1,8 @@
+// msgbox.c
+//
+// See msgbox.h for an overview.
+//
+
 #include "msgbox.h"
 
 #include "CArray.h"
@@ -8,24 +13,52 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-// TODO remove; these are for temporary testing
-#include <stdio.h>
 
+///////////////////////////////////////////////////////////////////////////////
+//  Future work.
 
-// Possible future features
+// **. By default, all data objects sent to callbacks are dynamic and owned by us.
+//     We free them when the callback returns. Add a way for msgbox to
+//     retain ownership of a data buffer so that buffer doesn't have to
+//     be copied by the user. This doesn't have to be in v1.
 //
-// * By default, all data objects sent to callbacks are dynamic and owned by us.
-//   We free them when the callback returns. Add a function to make it possible for
-//   a callback to retain ownership of a data buffer so that buffer doesn't have to
-//   be copied by the user. This doesn't have to be in v1.
+// **. Try to eliminate unnamed function call parameters.
+//
+// **. Make the address info in msg_Conn an official Address object.
+//
+// **. Add timeouts for msg_get.
+//
+// **. When we receive a request, ensure that next_reply_id is above its reply_id.
+//
+// **. Avoid blocking in send_all; instead cache data that needs to be sent and
+//     dole it out from the run loop. In practice, I can track how often this ends up
+//     as a problem (maybe how often send returns 0) and use that to prioritize things.
+//
+// **. Check for error return values from send/sendto in all cases. That check is missing
+//     at very least in msg_send.
+//
+// **. Encapsulate all references to header_len.
+//
+// **. Clean up use of num_bytes in the header for udp, as it is not used consistently now.
+//
+// **. Encapsulate out all the msg_Data handling. There's too much coupling with it now.
+//
+// **. Better behavior when a connect is attempted to an unavailable server.
+//
+// **. We currently send a tcp packet to indicate closure; modify this to use the standard
+//     tcp closing protocal - i.e. getting a 0 back from a valid recv call.
 //
 
+
+///////////////////////////////////////////////////////////////////////////////
+//  Debug mode setup.
 
 // This array is only used when DEBUG is defined.
 static int net_allocs[] = {0};  // Indexed by class.
@@ -64,7 +97,7 @@ static void free_class(void *ptr, int class) {
 
 #define sock_in_size sizeof(struct sockaddr_in)
 
-static msg_Data msg_no_data = { .num_bytes = 0, .bytes = NULL};
+static msg_Data msg_no_data = { .num_bytes = 0, .bytes = NULL };
 
 typedef struct {
   msg_Conn *conn;
@@ -72,45 +105,6 @@ typedef struct {
   msg_Data data;
   void *to_free;
 } PendingCall;
-
-// TODO
-// **. after tcp is added and most functionality is done
-// Solidify the rules for how we call free after a callback is called.
-// Right now they're something like this:
-// * free(to_free) if to_free != NULL
-// * free data->bytes if it's a tcp message and !NULL; (? revisit)
-// * free data->bytes - header_len if it's a udp message and !NULL.
-//
-// For connection closes (closed or lost), the msg_Conn object will have already
-// been removed from conns (and the socket removed from poll_fds), and the conn
-// object will be a copy of the original set as to_free.
-//
-// **. Try to eliminate unnamed function call parameter.
-//
-// **. Make the address info in msg_Conn an official Address object.
-//
-// **. Add timeouts for msg_get.
-//
-// **. When we receive a request, ensure that next_reply_id is above its reply_id.
-//
-// **. Avoid blocking in send_all; instead cache data that needs to be sent and
-//     dole it out from the run loop. In practice, I can track how often this ends up
-//     as a problem (maybe how often send returns 0) and use that to prioritize things.
-//
-// **. Check for error return values from send/sendto in all cases. That check is missing
-//     at very least in msg_send.
-//
-// **. Encapsulate all references to header_len.
-//
-// **. Clean up use of num_bytes in the header for udp, as it is not used consistently now.
-//
-// **. Encapsulate out all the msg_Data handling. There's too much coupling with it now.
-//
-// **. Better behavior when a connect is attempted to an unavailable server.
-//
-// **. We currently send a tcp packet to indicate closure; modify this to use the standard
-//     tcp closing protocal - i.e. getting a 0 back from a valid recv call.
-//
 
 static CArray immediate_callbacks = NULL;
 
@@ -135,15 +129,7 @@ typedef struct {
 } Header;
 
 #define header_len 8
-// TODO Drop recv_buffer_len if we don't use it.
-#define recv_buffer_len (32768 - header_len)
 
-
-// Header values for the reply_id field.
-static uint16_t next_reply_id = 1;
-static const uint16_t one_way_msg = 1;
-static const uint16_t is_reply_mask = 1 << 15;
-static const uint16_t max_reply_id = (1 << 15) - 1;  // = bits:01..1 with 15 ones.
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Connection status map.
@@ -229,7 +215,7 @@ static void delete_conn_status(void *status_v_ptr) {
 // This maps Address -> ConnStatus.
 // The actual keys & values are pointers to those types,
 // and the releasers free them.
-// TODO Once out_beats is added, let out_beats own the ConnStatus objects.
+// TODO Once heartbeats is added, let heartbeats own the ConnStatus objects.
 static CMap conn_status = NULL;
 
 // Returns NULL if the given remote address has no associated status.
@@ -457,8 +443,8 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
 
   // TODO Handle the case of receiving 0 bytes = remote connection closed.
   if (bytes_recvd == 0) {
-    printf("\nRemote connection closed!\n");
-    exit(22);  // random status for now
+    printf("\nRemote connection closed unexpectedly!\n");
+    exit(1);
   }
 
   // Convert each field from network to host byte ordering.
