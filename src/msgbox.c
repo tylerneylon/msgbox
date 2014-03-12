@@ -793,6 +793,19 @@ void msg_connect(const char *address, void *conn_context, msg_Callback callback)
 }
 
 void msg_unlisten(msg_Conn *conn) {
+  if (conn == NULL) {
+    fprintf(stderr, "Error: msg_unlisten called on NULL connection.\n");
+    return;
+  }
+  if (!conn->for_listening) {
+    return send_callback_error(conn, "msg_unlisten called on non-listening connection", NULL);
+  }
+  if (close(conn->socket) == -1) {
+    int saved_errno = errno;
+    send_callback_os_error(conn, "close", NULL);
+    if (saved_errno == EBADF) return;  // Don't send msg_listening_ended since it didn't.
+  }
+  send_callback(conn, msg_listening_ended, msg_no_data, NULL);
 }
 
 void msg_disconnect(msg_Conn *conn) {
