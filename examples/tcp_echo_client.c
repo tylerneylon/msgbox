@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 
+int net_allocs_for_class(int class);
+
 #define true 1
 #define false 0
 
@@ -36,11 +38,9 @@ void update(msg_Conn *conn, msg_Event event, msg_Data data) {
   if (event == msg_message) {
     printf("Client: message is '%s'.\n", msg_as_str(data));
 
-    /*
     msg_Data data = msg_new_data("request-reply message");
     msg_get(conn, data, "reply context");
     msg_delete_data(data);
-    */
   }
 
   if (event == msg_reply) {

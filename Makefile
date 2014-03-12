@@ -71,7 +71,7 @@ $(tests) : out/% : test/%.c $(test_obj)
 	$(cc) -o $@ -g $^
 
 $(examples) : out/% : examples/%.c out/libmsgbox.a
-	$(cc) -o $@ -g $^
+	$(cc) -o $@ $^
 
 # Listing this special-name rule prevents the deletion of intermediate files.
 .SECONDARY:

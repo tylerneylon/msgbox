@@ -14,6 +14,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+// TODO remove; these are for temporary testing
+#include <stdio.h>
+
+
 // Possible future features
 //
 // * By default, all data objects sent to callbacks are dynamic and owned by us.
@@ -22,14 +26,33 @@
 //   be copied by the user. This doesn't have to be in v1.
 //
 
-// Make it possible to turn on and off the assert macro based
-// on the DEBUG preprocessor definition.
+
+// This array is only used when DEBUG is defined.
+static int net_allocs[] = {0};  // Indexed by class.
 
 #ifdef DEBUG
+
 #include "memprofile.h"
 #include <assert.h>
-#else
+
+// Functions to assist in detecting memory leaks for tests.
+
+static void *alloc_class(size_t bytes, int class) {
+  ++net_allocs[class];
+  return malloc(bytes);
+}
+
+static void free_class(void *ptr, int class) {
+  --net_allocs[class];
+  free(ptr);
+}
+
+#else // non-DEBUG mode
+
 #define assert(x)
+#define alloc_class(bytes, class) malloc(bytes)
+#define free_class(ptr, class) free(ptr)
+
 #endif
 
 #define true 1
@@ -40,9 +63,6 @@
 #define no_error NULL
 
 #define sock_in_size sizeof(struct sockaddr_in)
-
-// TODO remove; these are for temporary testing
-#include <stdio.h>
 
 static msg_Data msg_no_data = { .num_bytes = 0, .bytes = NULL};
 
@@ -85,6 +105,11 @@ typedef struct {
 // **. Clean up use of num_bytes in the header for udp, as it is not used consistently now.
 //
 // **. Encapsulate out all the msg_Data handling. There's too much coupling with it now.
+//
+// **. Better behavior when a connect is attempted to an unavailable server.
+//
+// **. We currently send a tcp packet to indicate closure; modify this to use the standard
+//     tcp closing protocal - i.e. getting a 0 back from a valid recv call.
 //
 
 static CArray immediate_callbacks = NULL;
@@ -185,13 +210,11 @@ ConnStatus *new_conn_status(double now) {
 }
 
 static void new_conn_status_buffer(ConnStatus *status, Header *header) {
-  printf("*** Allocating %zd bytes for incoming tcp message.\n", header->num_bytes);  // DEBUG
   status->total_buffer = status->waiting_buffer = msg_new_data_space(header->num_bytes);
   memcpy(status->total_buffer.bytes - header_len, header, header_len);
 }
 
 static void delete_conn_status_buffer(ConnStatus *status) {
-  printf("*** Freeing %zd bytes for incoming tcp message.\n", status->total_buffer.num_bytes);  // DEBUG
   msg_delete_data(status->total_buffer);
   status->total_buffer = status->waiting_buffer = (msg_Data) { .num_bytes = 0, .bytes = NULL };
 }
@@ -216,10 +239,10 @@ ConnStatus *status_of_conn(msg_Conn *conn) {
   return pair ? (ConnStatus *)pair->value : NULL;
 }
 
-///////////////////////////////////////////////////////////////////////////////
-//  Internal functions.
 
-// DEBUG
+///////////////////////////////////////////////////////////////////////////////
+//  Debugging functions.
+
 static void print_bytes(char *bytes, size_t num_to_print) {
   printf("bytes (%zd) :", num_to_print);
   for (int i = 0; i < num_to_print; ++i) {
@@ -227,6 +250,12 @@ static void print_bytes(char *bytes, size_t num_to_print) {
   }
   printf("\n");
 }
+
+int net_allocs_for_class(int class) { return net_allocs[class]; }
+
+
+///////////////////////////////////////////////////////////////////////////////
+//  Internal functions.
 
 static void set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn) {
   memset(sockaddr, 0, sock_in_size);
@@ -580,7 +609,8 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     case msg_type_heartbeat:
       assert(0);
       break;
-    case msg_type_close:  // Only sent via udp.
+    case msg_type_close:
+      if (conn->protocol_type == msg_tcp) msg_delete_data(data);
       return local_disconnect(conn);
   }
 
@@ -603,11 +633,13 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
   // Look up a reply_context if it's a reply.
   if (header->message_type == msg_type_reply) {
-    KeyValuePair *pair = CMapFind(status->reply_contexts, (void *)(intptr_t)header->reply_id);
+    void *reply_id_key = (void *)(intptr_t)header->reply_id;
+    KeyValuePair *pair = CMapFind(status->reply_contexts, reply_id_key);
     if (pair == NULL) {
       return send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
     }
     conn->reply_context = pair->value;
+    CMapUnset(status->reply_contexts, reply_id_key);
   } else {
     conn->reply_context = NULL;
   }
@@ -739,12 +771,11 @@ void msg_runloop(int timeout_in_ms) {
 
   CArrayFor(PendingCall *, call, saved_immediate_callbacks) {
     call->conn->callback(call->conn, call->event, call->data);
+    if (call->data.bytes) msg_delete_data(call->data);
     if (call->to_free) free(call->to_free);
   }
 
-  // TODO free data from called callbacks
-
-  // TODO handle any timed callbacks
+  // TODO handle timed callbacks such as heartbeats and get timeouts
 
   CArrayDelete(saved_immediate_callbacks);
 }
@@ -763,13 +794,12 @@ void msg_unlisten(msg_Conn *conn) {
 }
 
 void msg_disconnect(msg_Conn *conn) {
-  // TODO Think carefully about this and make sure it does what we want for either client or server.
   msg_Data data = msg_new_data_space(0);
   int num_bytes = 0, packet_id = 0, reply_id = 0;
   set_header(data, msg_type_close, num_bytes, packet_id, reply_id);
 
-  int default_options = 0;
-  send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
+  char *failed_sys_call = send_data(conn, data);
+  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
   msg_delete_data(data);
 
   local_disconnect(conn);
@@ -785,7 +815,6 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
 }
 
-// TODO Refactor between msg_send and msg_get.
 void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   // Look up the next reply id.
   ConnStatus *status = status_of_conn(conn);
@@ -817,13 +846,13 @@ msg_Data msg_new_data(const char *str) {
 }
 
 msg_Data msg_new_data_space(size_t num_bytes) {
-  msg_Data data = {.num_bytes = num_bytes, .bytes = malloc(num_bytes + header_len)};
+  msg_Data data = {.num_bytes = num_bytes, .bytes = alloc_class(num_bytes + header_len, 0)};
   data.bytes += header_len;
   return data;
 }
 
 void msg_delete_data(msg_Data data) {
-  free(data.bytes - header_len);
+  free_class(data.bytes - header_len, 0);
 }
 
 char *msg_ip_str(msg_Conn *conn) {
