@@ -228,6 +228,13 @@ static void print_bytes(char *bytes, size_t num_to_print) {
   printf("\n");
 }
 
+static void set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn) {
+  memset(sockaddr, 0, sock_in_size);
+  sockaddr->sin_family = AF_INET;
+  sockaddr->sin_port = htons(conn->remote_port);
+  sockaddr->sin_addr.s_addr = conn->remote_ip;
+}
+
 // Returns -1 on error; 0 on success, similar to a system call.
 static int send_all(int socket, msg_Data data) {
   data.bytes -= header_len;
@@ -251,6 +258,31 @@ static int send_all(int socket, msg_Data data) {
   }
 
   return 0;
+}
+
+// Returns no_error (NULL) on success;
+// returns the name of the failing system call on error,
+// and errno holds the error code.
+static char *send_data(msg_Conn *conn, msg_Data data) {
+  int default_options = 0;
+
+  if (conn->protocol_type == msg_tcp) {
+    return send_all(conn->socket, data) ? "send" : no_error;
+  }
+
+  if (conn->protocol_type == msg_udp && conn->for_listening) {
+    struct sockaddr_in sockaddr;
+    set_sockaddr_for_conn(&sockaddr, conn);
+    ssize_t bytes_sent = sendto(conn->socket,
+        data.bytes - header_len, data.num_bytes + header_len, default_options,
+        (struct sockaddr *)&sockaddr, sock_in_size);
+    if (bytes_sent == -1) return "sendto";
+  } else {
+    ssize_t bytes_sent = send(conn->socket,
+        data.bytes - header_len, data.num_bytes + header_len, default_options);
+    if (bytes_sent == -1) return "send";
+  }
+  return no_error;
 }
 
 static void CArrayRemoveLast(CArray array) {
@@ -298,15 +330,6 @@ static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_fre
   static char err_msg[1024];
   snprintf(err_msg, 1024, "%s: %s", msg, strerror(errno));
   send_callback_error(conn, err_msg, to_free);
-}
-
-// Returns no_error (NULL) on success; otherwise an error string.
-static char *set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn) {
-  memset(sockaddr, 0, sock_in_size);
-  sockaddr->sin_family = AF_INET;
-  sockaddr->sin_port = htons(conn->remote_port);
-  sockaddr->sin_addr.s_addr = conn->remote_ip;
-  return no_error;
 }
 
 // Returns no_error (NULL) on success, and sets the protocol_type,
@@ -758,27 +781,8 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   int msg_type = conn->reply_id ? msg_type_reply : msg_type_one_way;
   set_header(data, msg_type, data.num_bytes, packet_id, conn->reply_id);
 
-  int default_options = 0;
-
-  if (conn->protocol_type == msg_tcp) {
-    int ret_val = send_all(conn->socket, data);
-    if (ret_val == -1) send_callback_os_error(conn, "send", NULL);
-    return;
-  }
-
-  if (conn->protocol_type == msg_udp && conn->for_listening) {
-    struct sockaddr_in sockaddr;
-    char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
-    if (err_msg) return send_callback_error(conn, err_msg, NULL);
-    ssize_t bytes_sent = sendto(conn->socket,
-        data.bytes - header_len, data.num_bytes + header_len, default_options,
-        (struct sockaddr *)&sockaddr, sock_in_size);
-    if (bytes_sent == -1) send_callback_os_error(conn, "sendto", NULL);
-  } else {
-    ssize_t bytes_sent = send(conn->socket,
-        data.bytes - header_len, data.num_bytes + header_len, default_options);
-    if (bytes_sent == -1) send_callback_os_error(conn, "send", NULL);
-  }
+  char *failed_sys_call = send_data(conn, data);
+  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
 }
 
 // TODO Refactor between msg_send and msg_get.
@@ -797,16 +801,8 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   int packet_id = 0;
   set_header(data, msg_type_request, data.num_bytes, packet_id, reply_id);
 
-  int default_options = 0;
-  if (conn->protocol_type == msg_udp && conn->for_listening) {
-    struct sockaddr_in sockaddr;
-    char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
-    if (err_msg) return send_callback_error(conn, err_msg, NULL);
-    sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
-        (struct sockaddr *)&sockaddr, sock_in_size);
-  } else {
-    send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
-  }
+  char *failed_sys_call = send_data(conn, data);
+  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
 }
 
 char *msg_as_str(msg_Data data) {
