@@ -483,7 +483,10 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
 static void local_disconnect(msg_Conn *conn) {
   Address *address = (Address *)(&conn->remote_ip);
   CMapUnset(conn_status, address);
-  send_callback(conn, msg_connection_closed, msg_no_data, conn);
+  void *to_free = conn;
+  // A listening udp msg_Conn lives until it is unlistened to.
+  if (conn->for_listening && conn->protocol_type == msg_udp) to_free = NULL;
+  send_callback(conn, msg_connection_closed, msg_no_data, to_free);
 
   if (!conn->for_listening) close(conn->socket);
 }
@@ -764,7 +767,6 @@ void msg_runloop(int timeout_in_ms) {
   }
 
   // TODO handle timed callbacks such as heartbeats and get timeouts
-
   CArrayDelete(saved_immediate_callbacks);
 }
 
@@ -791,6 +793,7 @@ void msg_unlisten(msg_Conn *conn) {
     send_callback_os_error(conn, "close", NULL);
     if (saved_errno == EBADF) return;  // Don't send msg_listening_ended since it didn't.
   }
+  // TODO Remove conn from conns, poll_fds, and free the memory.
   send_callback(conn, msg_listening_ended, msg_no_data, NULL);
 }
 

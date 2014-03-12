@@ -17,6 +17,7 @@ static char *event_names[] = {
   "msg_request",
   "msg_reply",
   "msg_listening",
+  "msg_listening_ended",
   "msg_connection_ready",
   "msg_connection_closed",
   "msg_connection_lost",

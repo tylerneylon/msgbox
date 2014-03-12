@@ -12,12 +12,14 @@
 #define false 0
 
 static int done = false;
+static msg_Conn *listening_conn = NULL;
 
 static char *event_names[] = {
   "msg_message",
   "msg_request",
   "msg_reply",
   "msg_listening",
+  "msg_listening_ended",
   "msg_connection_ready",
   "msg_connection_closed",
   "msg_connection_lost",
@@ -29,6 +31,8 @@ void update(msg_Conn *conn, msg_Event event, msg_Data data) {
   printf("Server: received event %s.\n", event_names[event]);
 
   if (event == msg_error) printf("Server: error: %s.\n", msg_as_str(data));
+
+  if (event == msg_listening) listening_conn = conn;
 
   if (event == msg_message || event == msg_request) {
     printf("Server: message is '%s'.\n", msg_as_str(data));
@@ -50,6 +54,11 @@ int main() {
 
   int timeout_in_ms = 10;
   while (!done) msg_runloop(timeout_in_ms);
+
+  msg_unlisten(listening_conn);
+
+  // Give the runloop a chance to see the msg_listening_ended event.
+  msg_runloop(timeout_in_ms);
 
   return 0;
 }
