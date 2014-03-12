@@ -1,10 +1,15 @@
-// udp_echo_server.c
+// echo_server.c
 //
 // A server that repeats back requests and messages.
+//
+// Run it as in one of these two examples:
+//  ./echo_server tcp
+//  ./echo_server udp
 //
 
 #include "msgbox.h"
 
+#include <libgen.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -44,13 +49,25 @@ void update(msg_Conn *conn, msg_Event event, msg_Data data) {
     msg_delete_data(out_data);
   }
 
-  if (event == msg_connection_closed) {
-    done = true;
-  }
+  if (event == msg_connection_closed) done = true;
 }
 
-int main() {
-  msg_listen("udp://*:2345", msg_no_context, update);
+int main(int argc, char **argv) {
+
+  // Ensure argv[1] is either udp or tcp.
+  if (argc != 2 || (strcmp(argv[1], "udp") && strcmp(argv[1], "tcp"))) {
+    char *name = basename(argv[0]);
+    printf("\n  Usage: %s (tcp|udp)\n\nMeant to be run after echo_server is started.\n", name);
+    return 2;
+  }
+
+  char *protocol = argv[1];
+  int port = protocol[0] == 't' ? 2345 : 2468;
+
+  char address[128];
+  snprintf(address, 128, "%s://*:%d", protocol, port);
+  printf("Server: listening at address %s\n", address);
+  msg_listen(address, msg_no_context, update);
 
   int timeout_in_ms = 10;
   while (!done) msg_runloop(timeout_in_ms);

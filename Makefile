@@ -19,7 +19,7 @@ tests = out/msgbox_test
 release_obj = $(addprefix out/,msgbox.o CArray.o CList.o CMap.o)
 debug_obj= $(addprefix out/debug_,msgbox.o CArray.o CList.o CMap.o)
 test_obj = out/ctest.o out/memprofile.o $(debug_obj)
-examples = $(addprefix out/,udp_echo_server udp_echo_client tcp_echo_server tcp_echo_client)
+examples = $(addprefix out/,echo_client echo_server)
 
 # Variables for build settings.
 includes = -Isrc
