@@ -251,6 +251,8 @@ static void print_bytes(char *bytes, size_t num_to_print) {
   printf("\n");
 }
 
+// This is purposefully *not* static, so it may be called externally by programs that
+// know of it. It only gives useful data when msgbox is compiled with DEBUG defined.
 int net_allocs_for_class(int class) { return net_allocs[class]; }
 
 
