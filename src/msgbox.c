@@ -39,8 +39,6 @@
 // an error string when an error is encountered.
 #define no_error NULL
 
-#define recv_buffer_len 32768
-
 #define sock_in_size sizeof(struct sockaddr_in)
 
 // TODO remove; these are for temporary testing
@@ -82,6 +80,10 @@ typedef struct {
 // **. Check for error return values from send/sendto in all cases. That check is missing
 //     at very least in msg_send.
 //
+// **. Encapsulate all references to header_len.
+//
+// **. Clean up use of num_bytes in the header for udp, as it is not used consistently now.
+//
 
 static CArray immediate_callbacks = NULL;
 
@@ -100,12 +102,15 @@ enum {
 
 typedef struct {
   uint16_t message_type;
-  uint16_t num_packets;
+  uint16_t num_bytes;
   uint16_t packet_id;
   uint16_t reply_id;
 } Header;
 
 #define header_len 8
+// TODO Drop recv_buffer_len if we don't use it.
+#define recv_buffer_len (32768 - header_len)
+
 
 // Header values for the reply_id field.
 static uint16_t next_reply_id = 1;
@@ -163,6 +168,10 @@ typedef struct {
   double last_seen_at;
   CMap reply_contexts;  // Map reply_id -> reply_context.
   uint16_t next_reply_id;
+
+  // These overlap; waiting_buffer is a suffix of total_buffer.
+  msg_Data total_buffer;
+  msg_Data waiting_buffer;
 } ConnStatus;
 
 ConnStatus *new_conn_status(double now) {
@@ -173,7 +182,19 @@ ConnStatus *new_conn_status(double now) {
   return status;
 }
 
-void delete_conn_status(void *status_v_ptr) {
+static void new_conn_status_buffer(ConnStatus *status, Header *header) {
+  printf("*** Allocating %zd bytes for incoming tcp message.\n", header->num_bytes);  // DEBUG
+  status->total_buffer = status->waiting_buffer = msg_new_data_space(header->num_bytes);
+  memcpy(status->total_buffer.bytes - header_len, header, header_len);
+}
+
+static void delete_conn_status_buffer(ConnStatus *status) {
+  printf("*** Freeing %zd bytes for incoming tcp message.\n", status->total_buffer.num_bytes);  // DEBUG
+  msg_delete_data(status->total_buffer);
+  status->total_buffer = status->waiting_buffer = (msg_Data) { .num_bytes = 0, .bytes = NULL };
+}
+
+static void delete_conn_status(void *status_v_ptr) {
   ConnStatus *status = (ConnStatus *)status_v_ptr;
   // This should be empty since we need to give the user a chance to free all contexts.
   assert(status->reply_contexts->count == 0);
@@ -329,11 +350,11 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
   return no_error;
 }
 
-static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_packets,
+static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_bytes,
     uint16_t packet_id, uint16_t reply_id) {
   Header *header = (Header *)(data.bytes - header_len);
   *header = (Header) {
-    .message_type = htons(msg_type), .num_packets = htons(num_packets),
+    .message_type = htons(msg_type), .num_bytes = htons(num_bytes),
     .packet_id = htons(packet_id), .reply_id = htons(reply_id)};
 }
 
@@ -383,9 +404,48 @@ static void local_disconnect(msg_Conn *conn) {
   if (!conn->for_listening) close(conn->socket);
 }
 
+// Returns true when the entire message is received;
+// returns false when more data remains but no error occurred; and
+// returns -1 when there was an error - the caller must respond to it.
+static int continue_recv(int sock, ConnStatus *status) {
+  msg_Data *buffer = &status->waiting_buffer;
+  int default_options = 0;
+  ssize_t bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
+  if (bytes_in == -1) return -1;
+  buffer->num_bytes -= bytes_in;
+  return buffer->num_bytes == 0;
+}
+
 static void read_from_socket(int sock, msg_Conn *conn) {
-  Header header;
-  if (!read_header(sock, conn, &header)) return;
+  ConnStatus *status = NULL;
+  Header *header = NULL;
+  msg_Data data;
+
+  // Read in any tcp data.
+  if (conn->protocol_type == msg_tcp) {
+    status = remote_address_seen(conn);
+    if (status->waiting_buffer.num_bytes == 0) {
+      // Begin a new recv.
+      if (!read_header(sock, conn, header)) return;
+      new_conn_status_buffer(status, header);
+    } else {
+      header = (Header *)(status->total_buffer.bytes - header_len);
+    }
+    int ret_val = continue_recv(conn->socket, status);
+    if (ret_val == -1) {
+      send_callback_os_error(conn, "recv", NULL);
+      return delete_conn_status_buffer(status);
+    }
+    if (ret_val == false) return;  // It will finish later.
+    data = status->total_buffer;
+    status->total_buffer = status->waiting_buffer = (msg_Data) { .num_bytes = 0, .bytes = NULL };
+
+  } else {
+
+    // New udp message: read the header.
+    header = alloca(sizeof(Header));
+    if (!read_header(sock, conn, header)) return;
+  }
 
   if (0) {
     // TODO Remove. Debug code.
@@ -396,15 +456,16 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       "msg_type_heartbeat",
       "msg_type_close"
     };
-    if (header.message_type < (sizeof(msg_type_str) / sizeof(char *))) {
-      printf("Received message of type '%s'.\n", msg_type_str[header.message_type]);
+    if (header->message_type < (sizeof(msg_type_str) / sizeof(char *))) {
+      printf("Received message of type '%s'.\n", msg_type_str[header->message_type]);
     } else {
-      printf("Received message of unknown type %d.\n", header.message_type);
+      printf("Received message of unknown type %d.\n", header->message_type);
     }
   }
 
+  // Set up the appropriate reaction event.
   msg_Event event;
-  switch (header.message_type) {
+  switch (header->message_type) {
     case msg_type_one_way:
       event = msg_message;
       break;
@@ -417,27 +478,33 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     case msg_type_heartbeat:
       assert(0);
       break;
-    case msg_type_close:
+    case msg_type_close:  // Only sent via udp.
       return local_disconnect(conn);
   }
 
-  char *buffer = malloc(recv_buffer_len);
-  int default_options = 0;
-  struct sockaddr_in remote_sockaddr;
-  socklen_t remote_sockaddr_size = sock_in_size;
-  ssize_t bytes_recvd = recvfrom(sock, buffer, recv_buffer_len, default_options,
-      (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
+  // Read in any udp data.
+  if (conn->protocol_type == msg_udp) {
+    data = msg_new_data_space(header->num_bytes);
+    struct sockaddr_in remote_sockaddr;
+    socklen_t remote_sockaddr_size = sock_in_size;
+    int default_options = 0;
+    ssize_t bytes_recvd = recvfrom(sock, data.bytes - header_len,
+        data.num_bytes + header_len, default_options,
+        (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
-  if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
+    if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
 
-  msg_Data data = { .num_bytes = bytes_recvd - header_len, .bytes = buffer + header_len};
-  conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
-  conn->remote_port = ntohs(remote_sockaddr.sin_port);
-  ConnStatus *status = remote_address_seen(conn);
+    conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
+    conn->remote_port = ntohs(remote_sockaddr.sin_port);
+    status = remote_address_seen(conn);
+  }
 
-  if (header.message_type == msg_type_reply) {
-    KeyValuePair *pair = CMapFind(status->reply_contexts, (void *)(intptr_t)header.reply_id);
-    if (pair == NULL) return send_callback_error(conn, "Unrecognized reply_id", buffer);
+  // Look up a reply_context if it's a reply.
+  if (header->message_type == msg_type_reply) {
+    KeyValuePair *pair = CMapFind(status->reply_contexts, (void *)(intptr_t)header->reply_id);
+    if (pair == NULL) {
+      return send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
+    }
     conn->reply_context = pair->value;
   }
 
@@ -603,8 +670,8 @@ void msg_unlisten(msg_Conn *conn) {
 void msg_disconnect(msg_Conn *conn) {
   // TODO Think carefully about this and make sure it does what we want for either client or server.
   msg_Data data = msg_new_data_space(0);
-  int num_packets = 1, packet_id = 0, reply_id = 0;
-  set_header(data, msg_type_close, num_packets, packet_id, reply_id);
+  int num_bytes = 0, packet_id = 0, reply_id = 0;
+  set_header(data, msg_type_close, num_bytes, packet_id, reply_id);
 
   int default_options = 0;
   send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
@@ -615,9 +682,9 @@ void msg_disconnect(msg_Conn *conn) {
 
 void msg_send(msg_Conn *conn, msg_Data data) {
   // Set up the header.
-  int num_packets = 1, packet_id = 0;
+  int packet_id = 0;
   int msg_type = conn->reply_id ? msg_type_reply : msg_type_one_way;
-  set_header(data, msg_type, num_packets, packet_id, conn->reply_id);
+  set_header(data, msg_type, data.num_bytes, packet_id, conn->reply_id);
 
   int default_options = 0;
 
@@ -631,10 +698,14 @@ void msg_send(msg_Conn *conn, msg_Data data) {
     struct sockaddr_in sockaddr;
     char *err_msg = set_sockaddr_for_conn(&sockaddr, conn);
     if (err_msg) return send_callback_error(conn, err_msg, NULL);
-    sendto(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options,
+    ssize_t bytes_sent = sendto(conn->socket,
+        data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sock_in_size);
+    if (bytes_sent == -1) send_callback_os_error(conn, "sendto", NULL);
   } else {
-    send(conn->socket, data.bytes - header_len, data.num_bytes + header_len, default_options);
+    ssize_t bytes_sent = send(conn->socket,
+        data.bytes - header_len, data.num_bytes + header_len, default_options);
+    if (bytes_sent == -1) send_callback_os_error(conn, "send", NULL);
   }
 }
 
@@ -651,8 +722,8 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   CMapSet(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
 
   // Set up the header.
-  int num_packets = 1, packet_id = 0;
-  set_header(data, msg_type_request, num_packets, packet_id, reply_id);
+  int packet_id = 0;
+  set_header(data, msg_type_request, data.num_bytes, packet_id, reply_id);
 
   int default_options = 0;
   if (conn->protocol_type == msg_udp && conn->for_listening) {
