@@ -84,7 +84,10 @@ designed to be called repeatedly and often using the
 
 ### Startup and shutdown functions
 
-#### - `void msg_listen(const char *address, void *conn_context, msg_Callback callback)`
+#### --- `msg_listen` ---
+
+`void msg_listen(const char *address, void *conn_context, msg_Callback callback)`
+
 
 This initiates a server at the given address, which must have the
 syntax `(tcp|udp)://(ip|*):<port>`; an example is `"tcp://*:6070"`.
@@ -107,7 +110,9 @@ and is always called from within `msg_runloop`, described below.
 A successful `msg_listen` call results in the `msg_listening` event being
 sent to your callback.
 
-#### - `void msg_unlisten(msg_Conn *conn)`
+#### --- `msg_unlisten` ---
+
+`void msg_unlisten(msg_Conn *conn)`
 
 This terminates a server, closing the underlying socket.
 
@@ -116,7 +121,9 @@ any event associated with the address being closed. A good opportunity to
 save `conn` is the `msg_listening` event, which occurs immediately after
 a successful `msg_listen` call.
 
-#### - `void msg_connect(const char *address, void *conn_context, msg_Callback callback)`
+#### --- `msg_connect` ---
+
+`void msg_connect(const char *address, void *conn_context, msg_Callback callback)`
 
 This function is designed for client-side use. It initiates a connection with the listening
 port specified in `address`. An example address is `"udp://1.2.3.4:8574"`.
@@ -135,7 +142,9 @@ your callback along with the `msg_connection_ready` event. One consequence is th
 an unreachable UDP server will experience a successful `msg_connection_ready` event,
 but any subsequent data transmission will fail.
 
-#### - `void msg_disconnect(msg_Conn *conn)`
+#### --- `msg_disconnect` ---
+
+`void msg_disconnect(msg_Conn *conn)`
 
 This closes the given connection. As with `msg_unlisten`, the `conn` object
 is expected to be the one sent to any event associated with
@@ -152,8 +161,11 @@ a successful disconnect.
 
 The `msg_send` and `msg_get` are similar enough that they're described together.
 
-#### - `void msg_send(msg_Conn *conn, msg_Data data)`
-#### - `void msg_get(msg_Conn *conn, msg_Data data, void *reply_context)`
+#### --- `msg_send` & `msg_get` ---
+
+`void msg_send(msg_Conn *conn, msg_Data data)`
+
+`void msg_get(msg_Conn *conn, msg_Data data, void *reply_context)`
 
 These send aribitrary binary data on the given connection (`conn`). This
 function can be used by either the client or the server once a connection is
@@ -233,7 +245,9 @@ sent in to `msg_get`.
 call `msg_runloop` as long as you want to work
 with `msgbox`.
 
-#### - `void msg_runloop(int timeout_in_ms)`
+#### --- `msg_runloop` ---
+
+`void msg_runloop(int timeout_in_ms)`
 
 If you set `timeout_in_ms` to 0, then `msg_runloop` is nonblocking and will return
 quickly. This is useful if you do your own work in your run loop; for example:
