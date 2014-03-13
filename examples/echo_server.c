@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
   // Ensure argv[1] is either udp or tcp.
   if (argc != 2 || (strcmp(argv[1], "udp") && strcmp(argv[1], "tcp"))) {
     char *name = basename(argv[0]);
-    printf("\n  Usage: %s (tcp|udp)\n\nMeant to be run after echo_server is started.\n", name);
+    printf("\n  Usage: %s (tcp|udp)\n\n", name);
     return 2;
   }
 
