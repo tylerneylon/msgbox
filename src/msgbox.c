@@ -55,6 +55,8 @@
 // **. We currently send a tcp packet to indicate closure; modify this to use the standard
 //     tcp closing protocal - i.e. getting a 0 back from a valid recv call.
 //
+// **. Make sure msgbox sets conn->reply_id to 0 for every event except msg_request.
+//
 
 
 ///////////////////////////////////////////////////////////////////////////////
