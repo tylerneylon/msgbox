@@ -23,7 +23,11 @@ examples = $(addprefix out/,echo_client echo_server)
 
 # Variables for build settings.
 includes = -Isrc
-cflags = $(includes) -std=c99 -D _BSD_SOURCE -D _POSIX_C_SOURCE=200809
+ifeq ($(shell uname -s), Darwin)
+	cflags = $(includes) -std=c99
+else
+	cflags = $(includes) -std=c99 -D _BSD_SOURCE -D _POSIX_C_SOURCE=200809
+endif
 cc = gcc $(cflags)
 
 # Test-running environment.
