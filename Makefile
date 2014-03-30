@@ -23,8 +23,8 @@ examples = $(addprefix out/,echo_client echo_server)
 
 # Variables for build settings.
 includes = -Isrc
-cflags = $(includes)
-cc = clang $(cflags)
+cflags = $(includes) -std=c99 -D _BSD_SOURCE -D _POSIX_C_SOURCE=200809
+cc = gcc $(cflags)
 
 # Test-running environment.
 testenv = DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib MALLOC_LOG_FILE=/dev/null

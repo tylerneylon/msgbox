@@ -9,6 +9,7 @@
 #include "CList.h"
 #include "CMap.h"
 
+#include <alloca.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -170,12 +171,12 @@ int address_eq(void *addr1, void *addr2) {
 }
 
 int reply_id_hash(void *reply_id) {
-  return (int)reply_id;
+  return (intptr_t)reply_id;
 }
 
 int reply_id_eq(void *reply_id1, void *reply_id2) {
-  uint16_t id1 = (uint16_t)reply_id1;
-  uint16_t id2 = (uint16_t)reply_id2;
+  uint16_t id1 = (intptr_t)reply_id1;
+  uint16_t id2 = (intptr_t)reply_id2;
   return id1 == id2;
 }
 
@@ -439,6 +440,7 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
   ssize_t bytes_recvd = recv(sock, buffer, header_len, options);
   if (bytes_recvd == -1) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return false;
     send_callback_os_error(conn, "recv", NULL);
     return false;
   }
@@ -520,7 +522,10 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       struct sockaddr_in remote_addr;
       socklen_t addr_len = sizeof(remote_addr);
       int new_sock = accept(conn->socket, (struct sockaddr *)&remote_addr, &addr_len);
-      if (new_sock == -1) return send_callback_os_error(conn, "accept", NULL);
+      if (new_sock == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+				return send_callback_os_error(conn, "accept", NULL);
+			}
 
       msg_Conn *new_conn = new_connection(conn->conn_context, conn->callback);
       new_conn->socket = new_sock;
@@ -753,7 +758,9 @@ void msg_runloop(int timeout_in_ms) {
         remote_address_seen(conn);  // Sends msg_connection_ready.
         poll_fd->events = POLLIN;
       }
-      if (poll_fd->revents & POLLIN) read_from_socket(poll_fd->fd, conn);
+      if (poll_fd->revents & POLLIN) {
+				read_from_socket(poll_fd->fd, conn);
+			}
     }
   }
 

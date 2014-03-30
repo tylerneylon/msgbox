@@ -5,6 +5,7 @@
 
 #include "ctest.h"
 
+#include <alloca.h>
 #include <execinfo.h>
 #include <libgen.h>
 #include <signal.h>
@@ -97,14 +98,17 @@ int test_printf_(const char *format, ...) {
 
     static char buffer[LOG_SIZE];
     va_start(args, format);
-    vsnprintf(buffer, LOG_SIZE, format, args);
+    int chars_out = vsnprintf(buffer, LOG_SIZE, format, args);
     va_end(args);
 
-    // The -1 makes room for the null terminator.
-    size_t size_left = log_end - log_cursor - 1;
-    char *new_cursor = log + strlcat(log_cursor, buffer, size_left);
-    chars_printed = new_cursor - log_cursor;
-    log_cursor = new_cursor;
+    size_t size_left = log_end - log_cursor - 1;  // Leave room for the last \0.
+    if (size_left < chars_out) {
+      // Truncate it if it's too long.
+      buffer[size_left] = '\0';
+      chars_out = size_left;
+    }
+    strcpy(log_cursor, buffer);
+    log_cursor += chars_out;
   }
 
   return chars_printed;
