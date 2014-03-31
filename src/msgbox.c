@@ -171,7 +171,7 @@ int address_eq(void *addr1, void *addr2) {
 }
 
 int reply_id_hash(void *reply_id) {
-  return (intptr_t)reply_id;
+  return (int)(intptr_t)reply_id;
 }
 
 int reply_id_eq(void *reply_id1, void *reply_id2) {
@@ -266,7 +266,7 @@ static int send_all(int socket, msg_Data data) {
 
   while (data.num_bytes > 0) {
     int default_send_options = 0;
-    int just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
+    long just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
     if (just_sent == -1) return -1;
     data.bytes += just_sent;
     data.num_bytes -= just_sent;
