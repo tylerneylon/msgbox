@@ -735,10 +735,12 @@ static void open_socket(const char *address, void *conn_context,
 //  Public functions.
 
 void msg_runloop(int timeout_in_ms) {
+  init_if_needed();
 
   if (immediate_callbacks->count) timeout_in_ms = 0;  // Don't delay pending calls.
   nfds_t num_fds = poll_fds->count;
-  int ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
+  int ret = 0;
+  if (num_fds) ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
 
   if (ret == -1) {
     // It's difficult to send a standard error callback to the user here because
