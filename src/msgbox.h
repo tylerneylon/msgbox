@@ -55,6 +55,7 @@ typedef struct msg_Conn {
   int socket;
   int for_listening;
   uint16_t reply_id;
+  int index;
 } msg_Conn;
 
 // Event loop function; expects to be called frequently.

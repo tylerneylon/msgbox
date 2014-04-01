@@ -63,6 +63,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 //  Debug mode setup.
 
+static int verbosity = 0;
+
 // This array is only used when DEBUG is defined.
 static int net_allocs[] = {0};  // Indexed by class.
 
@@ -112,8 +114,9 @@ typedef struct {
 static CArray immediate_callbacks = NULL;
 
 // These arrays have corresponding elements at the same index.
-static CArray poll_fds = NULL;
-static CArray conns = NULL;
+static CArray poll_fds = NULL;  // struct poll_fd elements.
+static CArray conns    = NULL;  // msg_Conn * elements.
+static CArray removals = NULL;  // int elements; which conns to remove.
 
 // Possible values for message_type
 enum {
@@ -309,6 +312,16 @@ static void CArrayRemoveLast(CArray array) {
   CArrayRemoveElement(array, CArrayElement(array, array->count - 1));
 }
 
+// This releases array[index], sets array[index] = array[count - 1], and
+// shortens the array by 1. Effectively, it quickly removes an element.
+static void CArrayRemoveAndFill(CArray array, int index) {
+  void *elt = CArrayElement(array, index);
+  void *last_elt = CArrayElement(array, array->count - 1);
+  if (array->releaser) array->releaser(elt);
+  if (elt != last_elt) memcpy(elt, last_elt, array->elementSize);
+  array->count--;
+}
+
 static void remove_last_polling_conn() {
   CArrayRemoveLast(conns);
   CArrayRemoveLast(poll_fds);
@@ -328,7 +341,8 @@ static void init_if_needed() {
 
   immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
   poll_fds = CArrayNew(8, sizeof(struct pollfd));
-  conns = CArrayNew(8, sizeof(msg_Conn *));
+  conns    = CArrayNew(8, sizeof(msg_Conn *));
+  removals = CArrayNew(8, sizeof(int));
 
   conn_status = CMapNew(address_hash, address_eq);
   conn_status->keyReleaser = free;
@@ -433,6 +447,29 @@ static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_bytes,
     .packet_id = htons(packet_id), .reply_id = htons(reply_id)};
 }
 
+static void remove_conn_at(int index) {
+  CArrayRemoveAndFill(conns, index);
+  msg_Conn *filled_conn = CArrayElementOfType(conns, index, msg_Conn *);
+  filled_conn->index = index;
+
+  CArrayRemoveAndFill(poll_fds, index);
+}
+
+// Drops the conn from conn_status and sends the given event, which
+// should be one of msg_connection_{closed,lost}.
+static void local_disconnect(msg_Conn *conn, msg_Event event) {
+  Address *address = (Address *)(&conn->remote_ip);
+  CMapUnset(conn_status, address);
+  void *to_free = conn;
+  // A listening udp msg_Conn lives until it is unlistened to.
+  if (conn->for_listening && conn->protocol_type == msg_udp) to_free = NULL;
+  send_callback(conn, event, msg_no_data, to_free);
+
+  if (!conn->for_listening) close(conn->socket);
+
+  CArrayAddElement(removals, conn->index);
+}
+
 // Reads the header of a udp packet.
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
@@ -445,10 +482,9 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     return false;
   }
 
-  // TODO Handle the case of receiving 0 bytes = remote connection closed.
   if (bytes_recvd == 0) {
-    printf("\nRemote connection closed unexpectedly!\n");
-    exit(1);
+    local_disconnect(conn, msg_connection_lost);
+    return false;
   }
 
   // Convert each field from network to host byte ordering.
@@ -483,18 +519,6 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
   return status;
 }
 
-// Drops the conn from conn_status and sends msg_connection_closed.
-static void local_disconnect(msg_Conn *conn) {
-  Address *address = (Address *)(&conn->remote_ip);
-  CMapUnset(conn_status, address);
-  void *to_free = conn;
-  // A listening udp msg_Conn lives until it is unlistened to.
-  if (conn->for_listening && conn->protocol_type == msg_udp) to_free = NULL;
-  send_callback(conn, msg_connection_closed, msg_no_data, to_free);
-
-  if (!conn->for_listening) close(conn->socket);
-}
-
 // Returns true when the entire message is received;
 // returns false when more data remains but no error occurred; and
 // returns -1 when there was an error - the caller must respond to it.
@@ -509,6 +533,9 @@ static int continue_recv(int sock, ConnStatus *status) {
 
 // TODO Make this function shorter or break it up.
 static void read_from_socket(int sock, msg_Conn *conn) {
+  if (verbosity >= 1) {
+    printf("%s(%d, %s)\n", __func__, sock, address_as_str(address_of_conn(conn)));
+  }
   ConnStatus *status = NULL;
   Header *header = NULL;
   msg_Data data;
@@ -527,16 +554,18 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 				return send_callback_os_error(conn, "accept", NULL);
 			}
 
-      msg_Conn *new_conn = new_connection(conn->conn_context, conn->callback);
-      new_conn->socket = new_sock;
-      new_conn->remote_ip = remote_addr.sin_addr.s_addr;
-      new_conn->remote_port = ntohs(remote_addr.sin_port);
+      msg_Conn *new_conn      = new_connection(conn->conn_context, conn->callback);
+      new_conn->socket        = new_sock;
+      new_conn->remote_ip     = remote_addr.sin_addr.s_addr;
+      new_conn->remote_port   = ntohs(remote_addr.sin_port);
       new_conn->protocol_type = conn->protocol_type;
+      new_conn->index         = conns->count;
       CArrayAddElement(conns, new_conn);
 
       struct pollfd *new_poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
-      new_poll_fd->fd = new_sock;
-      new_poll_fd->events = POLLIN;
+      new_poll_fd->fd      = new_sock;
+      new_poll_fd->events  = POLLIN;
+      new_poll_fd->revents = 0;  // Important since we may check this before we call poll.
 
       remote_address_seen(new_conn);  // Sets up a ConnStatus and sends msg_connection_ready.
       return;
@@ -609,7 +638,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       break;
     case msg_type_close:
       if (conn->protocol_type == msg_tcp) msg_delete_data(data);
-      return local_disconnect(conn);
+      return local_disconnect(conn, msg_connection_closed);
   }
 
   // Read in any udp data.
@@ -664,11 +693,13 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
 
   // We have a real socket, so add entries to both poll_fds and conns.
   conn->socket = sock;
+  conn->index  = conns->count;
   CArrayAddElement(conns, conn);
 
   struct pollfd *poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
-  poll_fd->fd = sock;
-  poll_fd->events = POLLIN;
+  poll_fd->fd      = sock;
+  poll_fd->events  = POLLIN;
+  poll_fd->revents = 0;
 
   // Initialize the sockaddr_in struct.
   memset(sockaddr, 0, sock_in_size);
@@ -739,6 +770,33 @@ void msg_runloop(int timeout_in_ms) {
 
   if (immediate_callbacks->count) timeout_in_ms = 0;  // Don't delay pending calls.
   nfds_t num_fds = poll_fds->count;
+
+  // Begin debug code.
+  if (verbosity >= 1) {
+    char last_poll_state[4096];
+    char poll_state[4096];
+    if (num_fds == 0) {
+      strcpy(poll_state, "<nothing to poll>\n");
+    } else {
+      char *s = poll_state;
+      s += sprintf(s, "Polling %d socket%s:\n", (int)num_fds, num_fds > 1 ? "s" : "");
+      s += sprintf(s, "  %-5s %-25s %-5s %s\n", "sock", "address", "type", "listening?");
+      int i = 0;
+      CArrayFor(struct pollfd *, poll_fd, poll_fds) {
+        msg_Conn *conn = CArrayElementOfType(conns, i, msg_Conn *);
+        int sock       = conn->socket;
+        char *address  = address_as_str(address_of_conn(conn));
+        char *type_str = conn->protocol_type == msg_tcp ? "tcp" : "udp";
+        char *listn    = conn->for_listening ? "yes" : "no";
+        s += sprintf(s, "  %-5d %-25s %-5s %s\n", sock, address, type_str, listn);
+        ++i;
+      }
+    }
+    if (strcmp(last_poll_state, poll_state) != 0) printf("%s", poll_state);
+    strcpy(last_poll_state, poll_state);
+  }
+  // End debug code.
+
   int ret = 0;
   if (num_fds) ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
 
@@ -765,6 +823,8 @@ void msg_runloop(int timeout_in_ms) {
 				read_from_socket(poll_fd->fd, conn);
 			}
     }
+    CArrayFor(int *, index, removals) remove_conn_at(*index);
+    CArrayClear(removals);
   }
 
   // Save the state of pending callbacks so that users can add new callbacks
@@ -818,7 +878,7 @@ void msg_disconnect(msg_Conn *conn) {
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
   msg_delete_data(data);
 
-  local_disconnect(conn);
+  local_disconnect(conn, msg_connection_closed);
 }
 
 void msg_send(msg_Conn *conn, msg_Data data) {
