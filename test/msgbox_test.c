@@ -178,6 +178,7 @@ int basic_test(int protocol_type) {
     exit(server(protocol_type));
   } else {
     // Parent process.
+    test_printf("Client pid=%d  server pid=%d\n", getpid(), child_pid);
     test_printf("Client: starting up.\n"); // tmp
     int client_failed = client(protocol_type, child_pid);
     int server_status;

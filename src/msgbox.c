@@ -58,12 +58,16 @@
 //
 // **. Make sure msgbox sets conn->reply_id to 0 for every event except msg_request.
 //
+// **. In read_header, be able to handle a partial head read (tcp only, I believe).
 
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Debug mode setup.
 
 static int verbosity = 0;
+
+// This can be used in cases of emergency debugging.
+#define prline printf("%s:%d(%s)\n", __FILE__, __LINE__, __func__)
 
 // This array is only used when DEBUG is defined.
 static int net_allocs[] = {0};  // Indexed by class.
@@ -194,7 +198,7 @@ typedef struct {
 } ConnStatus;
 
 ConnStatus *new_conn_status(double now) {
-  ConnStatus *status = malloc(sizeof(ConnStatus));
+  ConnStatus *status = calloc(1, sizeof(ConnStatus));
   status->last_seen_at = now;
   status->reply_contexts = CMapNew(reply_id_hash, reply_id_eq);
   status->next_reply_id = 1;
@@ -449,8 +453,10 @@ static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_bytes,
 
 static void remove_conn_at(int index) {
   CArrayRemoveAndFill(conns, index);
-  msg_Conn *filled_conn = CArrayElementOfType(conns, index, msg_Conn *);
-  filled_conn->index = index;
+  if (index < conns->count) {
+    msg_Conn *filled_conn = CArrayElementOfType(conns, index, msg_Conn *);
+    filled_conn->index = index;
+  }
 
   CArrayRemoveAndFill(poll_fds, index);
 }
@@ -497,6 +503,20 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     print_bytes((char *)header, sizeof(Header));
   }
 
+  if (0) {
+    char *type_names[] = {
+      "msg_type_one_way",
+      "msg_type_request",
+      "msg_type_reply",
+      "msg_type_heartbeat",
+      "msg_type_close"
+    };
+    printf("pid %d: Read in a header: type=%s #bytes=%d\n",
+           getpid(),
+           type_names[header->message_type],
+           header->num_bytes);
+  }
+
   return true;
 }
 
@@ -512,6 +532,7 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
     status = new_conn_status(0.0 /* TODO set to now */);
     address = malloc(sizeof(Address));
     *address = *address_of_conn(conn);
+
     CMapSet(conn_status, address, status);
     send_callback(conn, msg_connection_ready, msg_no_data, NULL);
   }
@@ -522,11 +543,17 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
 // Returns true when the entire message is received;
 // returns false when more data remains but no error occurred; and
 // returns -1 when there was an error - the caller must respond to it.
-static int continue_recv(int sock, ConnStatus *status) {
+// Returns -2 when a message was interrupted by a connection close.
+static int continue_recv(msg_Conn *conn, ConnStatus *status) {
+  int sock = conn->socket;
   msg_Data *buffer = &status->waiting_buffer;
   int default_options = 0;
   ssize_t bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
   if (bytes_in == -1) return -1;
+  if (bytes_in == 0) {
+    local_disconnect(conn, msg_connection_lost);
+    return -2;
+  }
   buffer->num_bytes -= bytes_in;
   return buffer->num_bytes == 0;
 }
@@ -534,7 +561,7 @@ static int continue_recv(int sock, ConnStatus *status) {
 // TODO Make this function shorter or break it up.
 static void read_from_socket(int sock, msg_Conn *conn) {
   if (verbosity >= 1) {
-    printf("%s(%d, %s)\n", __func__, sock, address_as_str(address_of_conn(conn)));
+    fprintf(stderr, "%s(%d, %s)\n", __func__, sock, address_as_str(address_of_conn(conn)));
   }
   ConnStatus *status = NULL;
   Header *header = NULL;
@@ -577,13 +604,17 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       // Begin a new recv.
       header = alloca(sizeof(Header));
       if (!read_header(sock, conn, header)) return;
+      if (header->message_type == msg_type_close) {
+        return local_disconnect(conn, msg_connection_closed);
+      }
       new_conn_status_buffer(status, header);
     } else {
 
       // Load header from the buffer we'll continue.
       header = (Header *)(status->total_buffer.bytes - header_len);
     }
-    int ret_val = continue_recv(conn->socket, status);
+    int ret_val = continue_recv(conn, status);
+    if (ret_val == -2) return;  // The message was interrupted by a close.
     if (ret_val == -1) {
       send_callback_os_error(conn, "recv", NULL);
       return delete_conn_status_buffer(status);
@@ -796,7 +827,7 @@ void msg_runloop(int timeout_in_ms) {
     strcpy(last_poll_state, poll_state);
   }
   // End debug code.
-
+  
   int ret = 0;
   if (num_fds) ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
 
@@ -814,6 +845,17 @@ void msg_runloop(int timeout_in_ms) {
       if (poll_fd->revents == 0) continue;
       int index = CArrayIndexOf(poll_fds, poll_fd);
       msg_Conn *conn = CArrayElementOfType(conns, index, msg_Conn *);
+
+      // I'm including these since I'm not sure how important they are to track.
+      if (verbosity >= 1) {
+        if (poll_fd->revents & POLLERR ||
+            poll_fd->revents & POLLNVAL) {
+          fprintf(stderr, "Error (POLLERR or POLLNVAL) response from poll() call.\n");
+        }
+        if (poll_fd->revents & POLLHUP) {
+          fprintf(stderr, "POLLHUP from poll() call.\n");
+        }
+      }
       if (poll_fd->revents & POLLOUT) {
         // We only listen for this event when waiting for a tcp connect to complete.
         remote_address_seen(conn);  // Sends msg_connection_ready.
