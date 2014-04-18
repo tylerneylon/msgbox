@@ -77,7 +77,14 @@ void long_string_server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   if (event == msg_error) test_printf("Server: Error: %s\n", msg_as_str(data));
 
   if (event == msg_message) {
-    test_str_eq(msg_as_str(data), long_string);
+    // Don't use test_str_eq here as these strings are too long to print out.
+    int str_are_equal = (strcmp(msg_as_str(data), long_string) == 0);
+    if (!str_are_equal) {
+      test_printf("Unequal strings; rec'd len=%d, real len=%d\n",
+                  strlen(msg_as_str(data)),
+                  strlen(long_string));
+    }
+    test_that(str_are_equal);
 
     // Send a message back to trigger the client to close.
     // We avoid a TIME_WAIT state on the server when the client closes.

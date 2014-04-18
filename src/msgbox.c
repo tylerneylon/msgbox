@@ -133,9 +133,8 @@ enum {
 
 typedef struct {
   uint16_t message_type;
-  uint16_t num_bytes;
-  uint16_t packet_id;
   uint16_t reply_id;
+  uint32_t num_bytes;
 } Header;
 
 #define header_len 8
@@ -274,6 +273,7 @@ static int send_all(int socket, msg_Data data) {
   while (data.num_bytes > 0) {
     int default_send_options = 0;
     long just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
+    if (just_sent == -1 && errno == EAGAIN) continue;
     if (just_sent == -1) return -1;
     data.bytes += just_sent;
     data.num_bytes -= just_sent;
@@ -443,12 +443,14 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
   return no_error;
 }
 
-static void set_header(msg_Data data, uint16_t msg_type, uint16_t num_bytes,
-    uint16_t packet_id, uint16_t reply_id) {
+static void set_header(msg_Data data,
+                       uint16_t msg_type, uint16_t reply_id, uint32_t num_bytes) {
+
   Header *header = (Header *)(data.bytes - header_len);
   *header = (Header) {
-    .message_type = htons(msg_type), .num_bytes = htons(num_bytes),
-    .packet_id = htons(packet_id), .reply_id = htons(reply_id)};
+    .message_type = htons(msg_type),
+    .reply_id     = htons(reply_id),
+    .num_bytes    = htonl(num_bytes) };
 }
 
 static void remove_conn_at(int index) {
@@ -479,9 +481,8 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
 // Reads the header of a udp packet.
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
-  uint16_t *buffer = (uint16_t *)header;
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
-  ssize_t bytes_recvd = recv(sock, buffer, header_len, options);
+  ssize_t bytes_recvd = recv(sock, header, header_len, options);
   if (bytes_recvd == -1) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return false;
     send_callback_os_error(conn, "recv", NULL);
@@ -494,9 +495,9 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   }
 
   // Convert each field from network to host byte ordering.
-  static const size_t num_shorts = header_len / sizeof(uint16_t);
-  for (int i = 0; i < num_shorts; ++i) buffer[i] = ntohs(buffer[i]);
-  conn->reply_id = header->reply_id;
+  header->message_type = ntohs(header->message_type);
+  header->reply_id     = ntohs(header->reply_id);
+  header->num_bytes    = ntohl(header->num_bytes);
 
   if (0) {
     printf("%s called; header has ", __func__);
@@ -554,6 +555,7 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
     local_disconnect(conn, msg_connection_lost);
     return -2;
   }
+  buffer->bytes     += bytes_in;
   buffer->num_bytes -= bytes_in;
   return buffer->num_bytes == 0;
 }
@@ -913,8 +915,8 @@ void msg_unlisten(msg_Conn *conn) {
 
 void msg_disconnect(msg_Conn *conn) {
   msg_Data data = msg_new_data_space(0);
-  int num_bytes = 0, packet_id = 0, reply_id = 0;
-  set_header(data, msg_type_close, num_bytes, packet_id, reply_id);
+  int num_bytes = 0, reply_id = 0;
+  set_header(data, msg_type_close, reply_id, num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
@@ -925,9 +927,8 @@ void msg_disconnect(msg_Conn *conn) {
 
 void msg_send(msg_Conn *conn, msg_Data data) {
   // Set up the header.
-  int packet_id = 0;
   int msg_type = conn->reply_id ? msg_type_reply : msg_type_one_way;
-  set_header(data, msg_type, data.num_bytes, packet_id, conn->reply_id);
+  set_header(data, msg_type, conn->reply_id, data.num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
@@ -945,8 +946,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   CMapSet(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
 
   // Set up the header.
-  int packet_id = 0;
-  set_header(data, msg_type_request, data.num_bytes, packet_id, reply_id);
+  set_header(data, msg_type_request, reply_id, data.num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
