@@ -928,7 +928,7 @@ void msg_disconnect(msg_Conn *conn) {
 void msg_send(msg_Conn *conn, msg_Data data) {
   // Set up the header.
   int msg_type = conn->reply_id ? msg_type_reply : msg_type_one_way;
-  set_header(data, msg_type, conn->reply_id, data.num_bytes);
+  set_header(data, msg_type, conn->reply_id, (uint32_t)data.num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
@@ -946,7 +946,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   CMapSet(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
 
   // Set up the header.
-  set_header(data, msg_type_request, reply_id, data.num_bytes);
+  set_header(data, msg_type_request, reply_id, (uint32_t)data.num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
   if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
