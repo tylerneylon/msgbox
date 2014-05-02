@@ -72,7 +72,7 @@ out/%.o : src/%.c src/%.h | out
 	$(cc) -o $@ -c $<
 
 $(tests) : out/% : test/%.c $(test_obj)
-	$(cc) -o $@ -g $^
+	$(cc) -o $@ -g $^ -lm
 
 $(examples) : out/% : examples/%.c out/libmsgbox.a
 	$(cc) -o $@ $^

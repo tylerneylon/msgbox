@@ -206,7 +206,8 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
   // We expect to hear events in this order.
   int expected_events[] = {
-    msg_listening, msg_connection_ready, msg_message, msg_connection_closed};
+    msg_listening, msg_connection_ready, msg_message,
+    msg_request, msg_connection_closed};
 
   test_printf("Server: Received event %s\n", event_names[event]);
   if (event == msg_error) test_printf("Server: Error: %s\n", msg_as_str(data));
@@ -219,6 +220,17 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     test_printf("Server: The message is '%s'.\n", msg_as_str(data));
     test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
     msg_send(conn, data);
+  }
+
+  if (event == msg_request) {
+    test_printf("Server: Request: Sending a reply back to %s:%d.\n",
+        msg_ip_str(conn), conn->remote_port);
+    test_printf("Server: The message is '%s'.\n", msg_as_str(data));
+    test_str_eq(msg_as_str(data), "request string");
+
+    msg_Data data = msg_new_data("reply string");
+    msg_send(conn, data);
+    msg_delete_data(data);
   }
 
   if (event == msg_connection_closed) {
@@ -258,7 +270,9 @@ int client_event_num;
 void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
   // We expect to hear events in this order:
-  int expected_events[] = {msg_connection_ready, msg_message, msg_connection_closed};
+  int expected_events[] = {
+    msg_connection_ready, msg_message, msg_reply, msg_connection_closed};
+
   test_printf("Client: Received event %s\n", event_names[event]);
   if (event == msg_error) test_printf("Client: Error: %s\n", msg_as_str(data));
   test_that(client_event_num < array_size(expected_events));
@@ -273,7 +287,17 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   if (event == msg_message) {
     test_printf("Client: Message from %s:%d.\n", msg_ip_str(conn), conn->remote_port);
     test_printf("Client: The message is '%s'.\n", msg_as_str(data));
-    test_that(strcmp(msg_as_str(data), "hello msgbox!") == 0);
+    test_str_eq(msg_as_str(data), "hello msgbox!");
+
+    msg_Data data = msg_new_data("request string");
+    msg_get(conn, data, msg_no_context);
+    msg_delete_data(data);
+  }
+
+  if (event == msg_reply) {
+    test_printf("Client: Message from %s:%d.\n", msg_ip_str(conn), conn->remote_port);
+    test_printf("Client: The message is '%s'.\n", msg_as_str(data));
+    test_str_eq(msg_as_str(data), "reply string");
 
     msg_disconnect(conn);
   }

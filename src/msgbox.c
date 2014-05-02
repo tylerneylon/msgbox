@@ -499,6 +499,8 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   header->reply_id     = ntohs(header->reply_id);
   header->num_bytes    = ntohl(header->num_bytes);
 
+  conn->reply_id       = header->reply_id;
+
   if (0) {
     printf("%s called; header has ", __func__);
     print_bytes((char *)header, sizeof(Header));
