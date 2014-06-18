@@ -5,21 +5,238 @@
 
 #include "msgbox.h"
 
+// Universal (windows/mac/linux) headers.
+
 #include "CArray.h"
 #include "CList.h"
 #include "CMap.h"
+
+#include <stdio.h>
+
+// Universal forward declarations for os-specific code.
+static CArray conns = NULL;     // msg_Conn * elements.
+static CArray removals = NULL;  // int elements; which conns to remove.
+
+static void CArrayRemoveAndFill (CArray array, int index);
+static void CArrayRemoveLast    (CArray array);
+
+typedef enum {
+  poll_mode_read  = 1,
+  poll_mode_write = 2,
+  poll_mode_err   = 4
+} PollMode;
+
+
+#ifndef _WIN32
+
+// Non-windows setup.
 
 #include <alloca.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#define err_would_block EWOULDBLOCK
+#define err_in_progress EINPROGRESS
+#define err_fault       EFAULT
+#define err_invalid     EINVAL
+#define err_bad_sock    EBADF
+#define err_intr        EINTR
+
+#define library_init
+
+// This does nothing on non-windows, but sets up a callback
+// calling convention when compiled on windows.
+#define ms_call_conv
+
+typedef CArray poll_fds_t;
+
+#define empty_poll_fds NULL
+
+#define closesocket close
+
+
+// Declarations for the functions below.
+
+// These arrays have corresponding elements at the same index.
+static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
+
+static void remove_last_polling_conn() {
+  CArrayRemoveLast(conns);
+  CArrayRemoveLast(poll_fds);
+}
+
+static void init_poll_fds() {
+  poll_fds = CArrayNew(8, sizeof(struct pollfd));
+}
+
+static void remove_from_poll_fds(int index) {
+  CArrayRemoveAndFill(poll_fds, index);
+}
+
+static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
+  short events = POLLIN;  // TODO Update this for other possible poll_mode inputs.
+  struct pollfd *new_poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
+  new_poll_fd->fd      = new_sock;
+  new_poll_fd->events  = events;
+  new_poll_fd->revents = 0;  // Important since we may check this before we call poll.
+}
+
+// Returns NULL on success; otherwise returns the name of the failing system call.
+static const char *make_non_blocking(int sock) {
+  int flags = fcntl(sock, F_GETFL, 0);
+  if (flags == -1) return "fcntl";
+
+  int ret_val = fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+  if (ret_val == -1) return "fcntl";
+
+  return NULL;  // Indicate success.
+}
+
+static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
+  struct pollfd *poll_fd = CArrayElement(poll_fds, index);
+  poll_fd->events = (poll_mode & poll_mode_read ? POLLIN : POLLOUT);
+}
+
+static int check_poll_fds(int timeout_in_ms) {
+  nfds_t num_fds = poll_fds->count;
+  return poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
+}
+
+static PollMode poll_fds_mode(int sock, int index) {
+  PollMode poll_mode = 0;
+  struct pollfd *poll_fd = (struct pollfd *)CArrayElement(poll_fds, index);
+  if (poll_fd->revents & POLLIN)                         poll_mode |= poll_mode_read;
+  if (poll_fd->revents & POLLOUT)                        poll_mode |= poll_mode_write;
+  if (poll_fd->revents & (POLLERR | POLLNVAL | POLLHUP)) poll_mode |= poll_mode_err;
+  return poll_mode;
+}
+
+#else
+
+// Windows setup.
+
+#include <winsock2.h>
+#include "winutil.h"
+
+#define err_would_block WSAEWOULDBLOCK
+#define err_in_progress WSAEINPROGRESS
+#define err_bad_sock    WSAENOTSOCK
+#define err_intr        WSAEINTR
+
+#define library_init library_init_()
+
+#define ms_call_conv __stdcall
+
+typedef struct {
+  CArray    sockets;
+  fd_set   read_fds;
+  fd_set  write_fds;
+  fd_set except_fds;
+} poll_fds_t;
+
+typedef int socklen_t;
+typedef int nfds_t;
+
+#define empty_poll_fds { NULL, NULL, NULL, NULL }
+
+void library_init_() {
+  WORD version_requested = MAKEWORD(2, 0);
+  WSADATA wsa_data;
+  int err = WSAStartup(version_requested, &wsa_data);
+
+  if (err) fprintf(stderr, "Error: received error %d from WSAStartup.\n", err);
+}
+
+// Declarations for the functions below.
+
+// These arrays have corresponding elements at the same index.
+static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
+
+static void remove_last_polling_conn() {
+  SOCKET s = CArrayElementOfType(poll_fds.sockets, poll_fds.sockets->count - 1, SOCKET);
+  FD_CLR(s, &poll_fds.read_fds);
+  FD_CLR(s, &poll_fds.write_fds);
+  FD_CLR(s, &poll_fds.except_fds);
+  CArrayRemoveLast(conns);
+  CArrayRemoveLast(poll_fds.sockets);
+}
+
+static void init_poll_fds() {
+  poll_fds.sockets = CArrayNew(16, sizeof(SOCKET));
+  FD_ZERO(&poll_fds.read_fds);
+  FD_ZERO(&poll_fds.write_fds);
+  FD_ZERO(&poll_fds.except_fds);
+}
+
+static void remove_from_poll_fds(int index) {
+  SOCKET s = CArrayElementOfType(poll_fds.sockets, index, SOCKET);
+  FD_CLR(s, &poll_fds.read_fds);
+  FD_CLR(s, &poll_fds.write_fds);
+  FD_CLR(s, &poll_fds.except_fds);
+  CArrayRemoveAndFill(poll_fds.sockets, index);
+}
+
+static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
+  *(SOCKET *)CArrayNewElement(poll_fds.sockets) = new_sock;
+  // TODO Update this for other possible poll_mode inputs.
+  FD_SET(new_sock, &poll_fds.read_fds);
+  FD_SET(new_sock, &poll_fds.except_fds);
+}
+
+static const char *make_non_blocking(int sock) {
+  u_long nonblocking_mode = 1;
+  int ret_val = ioctlsocket(sock, FIONBIO, &nonblocking_mode);
+  if (ret_val != 0) return "ioctlsocket";
+
+  return NULL;  // Indicate success.
+}
+
+static void set_last_conn_to_write_poll_mode() {
+  SOCKET s = CArrayElementOfType(poll_fds.sockets, poll_fds.sockets->count - 1, SOCKET);
+  FD_CLR(s, &poll_fds.read_fds);
+  FD_SET(s, &poll_fds.write_fds);
+}
+
+static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
+  SOCKET s = CArrayElementOfType(poll_fds.sockets, index, SOCKET);
+  fd_set *from_set = poll_mode & poll_mode_read ? &poll_fds.write_fds : &poll_fds.read_fds;
+  fd_set *  to_set = poll_mode & poll_mode_read ? &poll_fds.read_fds :  &poll_fds.write_fds;
+  FD_CLR(s, from_set);
+  FD_SET(s,   to_set);
+}
+
+static int check_poll_fds(int timeout_in_ms) {
+  const struct timeval timeout = { timeout_in_ms / 1000, (timeout_in_ms % 1000) * 1000 };
+  return select(
+    0,  // This is nfds, but is unused so the value doesn't matter.
+    &poll_fds.read_fds,
+    &poll_fds.write_fds,
+    &poll_fds.except_fds,
+    &timeout);
+}
+
+static PollMode poll_fds_mode(int sock, int index) {
+  PollMode poll_mode = 0;
+  if (FD_ISSET(sock, &poll_fds.read_fds))   poll_mode |= poll_mode_read;
+  if (FD_ISSET(sock, &poll_fds.write_fds))  poll_mode |= poll_mode_write;
+  if (FD_ISSET(sock, &poll_fds.except_fds)) poll_mode |= poll_mode_err;
+  return poll_mode;
+}
+
+// TODO
+//  * Coordinate calls to send_callback_os_error with
+//    retrieving the correct error info from winsock.
+//  * Make sure calls to strerror (or perror?) will do
+//    what we want on windows.
+
+#endif
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -67,7 +284,7 @@
 static int verbosity = 0;
 
 // This can be used in cases of emergency debugging.
-#define prline printf("%s:%d(%s)\n", __FILE__, __LINE__, __func__)
+#define prline printf("%s:%d(%s)\n", __FILE__, __LINE__, __FUNCTION__)
 
 // This array is only used when DEBUG is defined.
 static int net_allocs[] = {0};  // Indexed by class.
@@ -116,11 +333,6 @@ typedef struct {
 } PendingCall;
 
 static CArray immediate_callbacks = NULL;
-
-// These arrays have corresponding elements at the same index.
-static CArray poll_fds = NULL;  // struct poll_fd elements.
-static CArray conns    = NULL;  // msg_Conn * elements.
-static CArray removals = NULL;  // int elements; which conns to remove.
 
 // Possible values for message_type
 enum {
@@ -273,7 +485,7 @@ static int send_all(int socket, msg_Data data) {
   while (data.num_bytes > 0) {
     int default_send_options = 0;
     long just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
-    if (just_sent == -1 && errno == EAGAIN) continue;
+    if (just_sent == -1 && errno == err_would_block) continue;
     if (just_sent == -1) return -1;
     data.bytes += just_sent;
     data.num_bytes -= just_sent;
@@ -300,12 +512,12 @@ static char *send_data(msg_Conn *conn, msg_Data data) {
   if (conn->protocol_type == msg_udp && conn->for_listening) {
     struct sockaddr_in sockaddr;
     set_sockaddr_for_conn(&sockaddr, conn);
-    ssize_t bytes_sent = sendto(conn->socket,
+    int bytes_sent = sendto(conn->socket,
         data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sock_in_size);
     if (bytes_sent == -1) return "sendto";
   } else {
-    ssize_t bytes_sent = send(conn->socket,
+    int bytes_sent = send(conn->socket,
         data.bytes - header_len, data.num_bytes + header_len, default_options);
     if (bytes_sent == -1) return "send";
   }
@@ -326,11 +538,6 @@ static void CArrayRemoveAndFill(CArray array, int index) {
   array->count--;
 }
 
-static void remove_last_polling_conn() {
-  CArrayRemoveLast(conns);
-  CArrayRemoveLast(poll_fds);
-}
-
 static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
   msg_Conn *conn = malloc(sizeof(msg_Conn));
   memset(conn, 0, sizeof(msg_Conn));
@@ -343,10 +550,12 @@ static void init_if_needed() {
   static int init_done = false;
   if (init_done) return;
 
+  library_init;
+
   immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
-  poll_fds = CArrayNew(8, sizeof(struct pollfd));
   conns    = CArrayNew(8, sizeof(msg_Conn *));
   removals = CArrayNew(8, sizeof(int));
+  init_poll_fds();
 
   conn_status = CMapNew(address_hash, address_eq);
   conn_status->keyReleaser = free;
@@ -356,7 +565,7 @@ static void init_if_needed() {
 }
 
 static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data, void *to_free) {
-  PendingCall pending_callback = {.conn = conn, .event = event, .data = data, .to_free = to_free};
+  PendingCall pending_callback = { .conn = conn, .event = event, .data = { data.num_bytes, data.bytes }, .to_free = to_free };
   CArrayAddElement(immediate_callbacks, pending_callback);
 }
 
@@ -460,7 +669,7 @@ static void remove_conn_at(int index) {
     filled_conn->index = index;
   }
 
-  CArrayRemoveAndFill(poll_fds, index);
+  remove_from_poll_fds(index);
 }
 
 // Drops the conn from conn_status and sends the given event, which
@@ -482,9 +691,9 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
-  ssize_t bytes_recvd = recv(sock, header, header_len, options);
+  int bytes_recvd = recv(sock, header, header_len, options);
   if (bytes_recvd == -1) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) return false;
+    if (errno == err_would_block) return false;
     send_callback_os_error(conn, "recv", NULL);
     return false;
   }
@@ -501,12 +710,12 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
 
   conn->reply_id       = header->reply_id;
 
-  if (0) {
-    printf("%s called; header has ", __func__);
+  if (false) {
+    printf("%s called; header has ", __FUNCTION__);
     print_bytes((char *)header, sizeof(Header));
   }
 
-  if (0) {
+  if (false) {
     char *type_names[] = {
       "msg_type_one_way",
       "msg_type_request",
@@ -551,7 +760,7 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
   int sock = conn->socket;
   msg_Data *buffer = &status->waiting_buffer;
   int default_options = 0;
-  ssize_t bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
+  int bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
   if (bytes_in == -1) return -1;
   if (bytes_in == 0) {
     local_disconnect(conn, msg_connection_lost);
@@ -565,7 +774,7 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
 // TODO Make this function shorter or break it up.
 static void read_from_socket(int sock, msg_Conn *conn) {
   if (verbosity >= 1) {
-    fprintf(stderr, "%s(%d, %s)\n", __func__, sock, address_as_str(address_of_conn(conn)));
+    fprintf(stderr, "%s(%d, %s)\n", __FUNCTION__, sock, address_as_str(address_of_conn(conn)));
   }
   ConnStatus *status = NULL;
   Header *header = NULL;
@@ -581,7 +790,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       socklen_t addr_len = sizeof(remote_addr);
       int new_sock = accept(conn->socket, (struct sockaddr *)&remote_addr, &addr_len);
       if (new_sock == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+        if ( errno == err_would_block) return;
 				return send_callback_os_error(conn, "accept", NULL);
 			}
 
@@ -593,10 +802,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       new_conn->index         = conns->count;
       CArrayAddElement(conns, new_conn);
 
-      struct pollfd *new_poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
-      new_poll_fd->fd      = new_sock;
-      new_poll_fd->events  = POLLIN;
-      new_poll_fd->revents = 0;  // Important since we may check this before we call poll.
+      add_to_poll_fds(new_sock, poll_mode_read);
 
       remote_address_seen(new_conn);  // Sets up a ConnStatus and sends msg_connection_ready.
       return;
@@ -682,7 +888,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     struct sockaddr_in remote_sockaddr;
     socklen_t remote_sockaddr_size = sock_in_size;
     int default_options = 0;
-    ssize_t bytes_recvd = recvfrom(sock, data.bytes - header_len,
+    int bytes_recvd = recvfrom(sock, data.bytes - header_len,
         data.num_bytes + header_len, default_options,
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
@@ -731,10 +937,7 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   conn->index  = conns->count;
   CArrayAddElement(conns, conn);
 
-  struct pollfd *poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
-  poll_fd->fd      = sock;
-  poll_fd->events  = POLLIN;
-  poll_fd->revents = 0;
+  add_to_poll_fds(sock, poll_mode_read);
 
   // Initialize the sockaddr_in struct.
   memset(sockaddr, 0, sock_in_size);
@@ -745,7 +948,7 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   return true;
 }
 
-typedef int (*SocketOpener)(int, const struct sockaddr *, socklen_t);
+typedef int (ms_call_conv *SocketOpener)(int, const struct sockaddr *, socklen_t);
 
 static void open_socket(const char *address, void *conn_context,
     msg_Callback callback, int for_listening) {
@@ -754,28 +957,22 @@ static void open_socket(const char *address, void *conn_context,
   msg_Conn *conn = new_connection(conn_context, callback);
   conn->for_listening = for_listening;
   struct sockaddr_in *sockaddr = alloca(sock_in_size);
-  if (!setup_sockaddr(sockaddr, address, conn)) return;  // Error; setup_sockaddr now owns conn.
+  if (!setup_sockaddr(sockaddr, address, conn)) { return; }  // Error; setup_sockaddr now owns conn.
 
   // Make the socket non-blocking so a connect call won't block.
-  int flags = fcntl(conn->socket, F_GETFL, 0);
-  if (flags == -1) {
-    send_callback_os_error(conn, "fcntl", conn);
-    return remove_last_polling_conn();
-  }
-  int ret_val = fcntl(conn->socket, F_SETFL, flags | O_NONBLOCK);
-  if (ret_val == -1) {
-    send_callback_os_error(conn, "fcntl", conn);
+  const char *failing_fn = make_non_blocking(conn->socket);
+  if (failing_fn) {
+    send_callback_os_error(conn, failing_fn, conn);
     return remove_last_polling_conn();
   }
 
   char *sys_call_name = for_listening ? "bind" : "connect";
   SocketOpener sys_open_sock = for_listening ? bind : connect;
-  ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
+  int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
   if (ret_val == -1) {
-    if (!for_listening && conn->protocol_type == msg_tcp && errno == EINPROGRESS) {
-      // The EINPROGRESS error is ok; in that case we'll send msg_connection_ready later.
-      struct pollfd *poll_fd = CArrayElement(poll_fds, poll_fds->count - 1);
-      poll_fd->events = POLLOUT;
+    if (!for_listening && conn->protocol_type == msg_tcp && errno == err_in_progress) {
+      // The err_in_progress error is ok; in that case we'll send msg_connection_ready later.
+      set_conn_to_poll_mode(conns->count - 1, poll_mode_write);
       return;
     }
     send_callback_os_error(conn, sys_call_name, conn);
@@ -803,8 +1000,8 @@ static void open_socket(const char *address, void *conn_context,
 void msg_runloop(int timeout_in_ms) {
   init_if_needed();
 
-  if (immediate_callbacks->count) timeout_in_ms = 0;  // Don't delay pending calls.
-  nfds_t num_fds = poll_fds->count;
+  if (immediate_callbacks->count) { timeout_in_ms = 0; }  // Don't delay pending calls.
+  nfds_t num_fds = conns->count;
 
   // Begin debug code.
   if (verbosity >= 1) {
@@ -816,58 +1013,59 @@ void msg_runloop(int timeout_in_ms) {
       char *s = poll_state;
       s += sprintf(s, "Polling %d socket%s:\n", (int)num_fds, num_fds > 1 ? "s" : "");
       s += sprintf(s, "  %-5s %-25s %-5s %s\n", "sock", "address", "type", "listening?");
-      int i = 0;
-      CArrayFor(struct pollfd *, poll_fd, poll_fds) {
-        msg_Conn *conn = CArrayElementOfType(conns, i, msg_Conn *);
-        int sock       = conn->socket;
+      CArrayFor(msg_Conn **, conn_ptr, conns) {
+        msg_Conn *conn = *conn_ptr;
+        int   sock     = conn->socket;
         char *address  = address_as_str(address_of_conn(conn));
         char *type_str = conn->protocol_type == msg_tcp ? "tcp" : "udp";
         char *listn    = conn->for_listening ? "yes" : "no";
         s += sprintf(s, "  %-5d %-25s %-5s %s\n", sock, address, type_str, listn);
-        ++i;
       }
     }
     if (strcmp(last_poll_state, poll_state) != 0) printf("%s", poll_state);
     strcpy(last_poll_state, poll_state);
   }
   // End debug code.
-  
+
+  // TODO CRITICAL Reset all fd_set data either just before or just after a call to check_poll_fds. (windows)
+
   int ret = 0;
-  if (num_fds) ret = poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
+  if (num_fds) ret = check_poll_fds(timeout_in_ms);
 
   if (ret == -1) {
     // It's difficult to send a standard error callback to the user here because
     // we don't know which connection (and therefore which callback pointer) to use;
     // also, critical errors should only happen here due to bugs in msgbox itself.
-    if (errno == EFAULT || errno == EINVAL) {
+    
+    // TODO Get the real errno on windows.
+    if (errno != err_intr && errno != err_in_progress) {
       // These theoretically can only be my fault; still, let the user know.
       fprintf(stderr, "Internal msgbox error during 'poll' call: %s\n", strerror(errno));
     }
     // Otherwise errno is EAGAIN or EINTR, both non-critical.
   } else if (ret > 0) {
-    CArrayFor(struct pollfd *, poll_fd, poll_fds) {
-      if (poll_fd->revents == 0) continue;
-      int index = CArrayIndexOf(poll_fds, poll_fd);
-      msg_Conn *conn = CArrayElementOfType(conns, index, msg_Conn *);
+    // TODO Check to see if we can override macros with effectively default parameter values. If yes, support an optional int index in CArrayFor.
+    int i = 0;
+    CArrayFor(msg_Conn **, conn_ptr, conns) {
+      msg_Conn *conn = *conn_ptr;
+      PollMode poll_mode = poll_fds_mode(conn->socket, i);
 
       // I'm including these since I'm not sure how important they are to track.
       if (verbosity >= 1) {
-        if (poll_fd->revents & POLLERR ||
-            poll_fd->revents & POLLNVAL) {
-          fprintf(stderr, "Error (POLLERR or POLLNVAL) response from poll() call.\n");
-        }
-        if (poll_fd->revents & POLLHUP) {
-          fprintf(stderr, "POLLHUP from poll() call.\n");
+        if (poll_mode & poll_mode_err) {
+          fprintf(stderr, "Error response from socket %d on poll or select call.\n", conn->socket);
         }
       }
-      if (poll_fd->revents & POLLOUT) {
+      if (poll_mode & poll_mode_write) {
         // We only listen for this event when waiting for a tcp connect to complete.
         remote_address_seen(conn);  // Sends msg_connection_ready.
-        poll_fd->events = POLLIN;
+        set_conn_to_poll_mode(i, poll_mode_read);
       }
-      if (poll_fd->revents & POLLIN) {
-				read_from_socket(poll_fd->fd, conn);
-			}
+      if (poll_mode & poll_mode_read) {
+        // TODO Why are the two params to read_from_socket separate, since conn->socket should always = the given fd?
+        read_from_socket(conn->socket, conn);
+      }
+      ++i;
     }
     CArrayFor(int *, index, removals) remove_conn_at(*index);
     CArrayClear(removals);
@@ -906,10 +1104,10 @@ void msg_unlisten(msg_Conn *conn) {
   if (!conn->for_listening) {
     return send_callback_error(conn, "msg_unlisten called on non-listening connection", NULL);
   }
-  if (close(conn->socket) == -1) {
+  if (closesocket(conn->socket) == -1) {
     int saved_errno = errno;
     send_callback_os_error(conn, "close", NULL);
-    if (saved_errno == EBADF) return;  // Don't send msg_listening_ended since it didn't.
+    if (saved_errno == err_bad_sock) return;  // Don't send msg_listening_ended since it didn't.
   }
   // TODO Remove conn from conns, poll_fds, and free the memory.
   send_callback(conn, msg_listening_ended, msg_no_data, NULL);
