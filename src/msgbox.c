@@ -123,6 +123,7 @@ static PollMode poll_fds_mode(int sock, int index) {
 // Windows setup.
 
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include "winutil.h"
 
 #define err_would_block WSAEWOULDBLOCK
@@ -612,7 +613,7 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
     return err_msg;
   }
 
-  // 2. Check substring length and copy over so we can hand inet_aton a null-terminated version.
+  // 2. Check substring length and copy over so we can hand inet_pton a null-terminated version.
   size_t ip_len = colon - ip_start;
   if (ip_len > 15 || ip_len < 1) {
     snprintf(err_msg, 1024,
@@ -624,12 +625,12 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
   char *ip_str_end = stpncpy(ip_str, ip_start, ip_len);
   *ip_str_end = '\0';
 
-  // 3. Let inet_aton handle the actual parsing.
+  // 3. Let inet_pton handle the actual parsing.
   if (strcmp(ip_str, "*") == 0) {
     conn->remote_ip = INADDR_ANY;
   } else {
     struct in_addr ip;
-    if (inet_aton(ip_str, &ip) == 0) {
+    if (inet_pton(AF_INET, ip_str, &ip) != 1) {
       snprintf(err_msg, 1024, "Couldn't parse ip string '%s'.", ip_str);
       return err_msg;
     }
@@ -1008,22 +1009,23 @@ void msg_runloop(int timeout_in_ms) {
     char last_poll_state[4096];
     char poll_state[4096];
     if (num_fds == 0) {
-      strcpy(poll_state, "<nothing to poll>\n");
+      strncpy(poll_state, "<nothing to poll>\n", 4096);
     } else {
       char *s = poll_state;
-      s += sprintf(s, "Polling %d socket%s:\n", (int)num_fds, num_fds > 1 ? "s" : "");
-      s += sprintf(s, "  %-5s %-25s %-5s %s\n", "sock", "address", "type", "listening?");
+      char *s_end = s + 4096;
+      s += snprintf(s, s_end - s, "Polling %d socket%s:\n", (int)num_fds, num_fds > 1 ? "s" : "");
+      s += snprintf(s, s_end - s, "  %-5s %-25s %-5s %s\n", "sock", "address", "type", "listening?");
       CArrayFor(msg_Conn **, conn_ptr, conns) {
         msg_Conn *conn = *conn_ptr;
         int   sock     = conn->socket;
         char *address  = address_as_str(address_of_conn(conn));
         char *type_str = conn->protocol_type == msg_tcp ? "tcp" : "udp";
         char *listn    = conn->for_listening ? "yes" : "no";
-        s += sprintf(s, "  %-5d %-25s %-5s %s\n", sock, address, type_str, listn);
+        s += snprintf(s, s_end - s, "  %-5d %-25s %-5s %s\n", sock, address, type_str, listn);
       }
     }
     if (strcmp(last_poll_state, poll_state) != 0) printf("%s", poll_state);
-    strcpy(last_poll_state, poll_state);
+    strncpy(last_poll_state, poll_state, 4096);
   }
   // End debug code.
 
@@ -1158,8 +1160,9 @@ char *msg_as_str(msg_Data data) {
 
 msg_Data msg_new_data(const char *str) {
   // Allocate room for the string with +1 for the null terminator.
-  msg_Data data = msg_new_data_space(strlen(str) + 1);
-  strcpy(data.bytes, str);
+  size_t data_size = strlen(str) + 1;
+  msg_Data data = msg_new_data_space(data_size);
+  strncpy(data.bytes, str, data_size);
   return data;
 }
 
