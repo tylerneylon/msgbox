@@ -67,6 +67,10 @@ typedef CArray poll_fds_t;
 // These arrays have corresponding elements at the same index.
 static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
 
+static char *err_str() {
+  return strerror(errno);
+}
+
 static void remove_last_polling_conn() {
   CArrayRemoveLast(conns);
   CArrayRemoveLast(poll_fds);
@@ -147,7 +151,42 @@ typedef int nfds_t;
 
 #define empty_poll_fds { NULL, NULL, NULL, NULL }
 
-void library_init_() {
+// Most winsock api (WSA) errors are contiguous with codes 10035-10071.
+// This is the array of their names. The non-contiguous cases must be
+// handled manually. These error names are from this msdn page:
+// http://msdn.microsoft.com/en-us/library/windows/desktop/ms740668(v=vs.85).aspx
+static const char *err_strs[] = {
+  "WSAEWOULDBLOCK", "WSAEINPROGRESS", "WSAEALREADY", "WSAENOTSOCK",     // 10035 - 10038
+  "WSAEDESTADDRREQ", "WSAEMSGSIZE", "WSAEPROTOTYPE", "WSAENOPROTOOPT",  // 10039 - 10042
+  "WSAEPROTONOSUPPORT", "WSAESOCKTNOSUPPORT", "WSAEOPNOTSUPP",          // 10043 - 10045
+  "WSAEPFNOSUPPORT", "WSAEAFNOSUPPORT", "WSAEADDRINUSE",                // 10046 - 10048
+  "WSAEADDRNOTAVAIL", "WSAENETDOWN", "WSAENETUNREACH", "WSAENETRESET",  // 10049 - 10052
+  "WSAECONNABORTED", "WSAECONNRESET", "WSAENOBUFS", "WSAEISCONN",       // 10053 - 10056
+  "WSAENOTCONN", "WSAESHUTDOWN", "WSAETOOMANYREFS", "WSAETIMEDOUT",     // 10057 - 10060
+  "WSAECONNREFUSED", "WSAELOOP", "WSAENAMETOOLONG", "WSAEHOSTDOWN",     // 10061 - 10064
+  "WSAEHOSTUNREACH", "WSAENOTEMPTY", "WSAEPROCLIM", "WSAEUSERS",        // 10065 - 10068
+  "WSAEDQUOT", "WSAESTALE", "WSAEREMOTE"                                // 10069 - 10071
+};
+
+static char *err_str() {
+  int last_err = WSAGetLastError();
+  int unique_err_nums[] = { 10004, 10009, 10013, 10014, 10022, 10024 };
+  const char *unique_err_strs[] = {
+    "WSAEINTR", "WSAEBADF", "WSAEACCES", "WSAEFAULT", "WSAEINVAL", "WSAEMFILE"
+  };
+  int num_unique_errs = sizeof(unique_err_nums) / sizeof(unique_err_nums[0]);
+  for (int i = 0; i < num_unique_errs; ++i) {
+    if (last_err == unique_err_nums[i]) return unique_err_strs[i];
+  }
+  if (10035 <= last_err && last_err <= 10071) {
+    return err_strs[last_err - 10035];
+  }
+  static char err_msg[64];
+  snprintf(err_msg, 64, "Unknown error code: %d", last_err);
+  return err_msg;
+}
+
+static void library_init_() {
   WORD version_requested = MAKEWORD(2, 0);
   WSADATA wsa_data;
   int err = WSAStartup(version_requested, &wsa_data);
@@ -220,12 +259,6 @@ static PollMode poll_fds_mode(int sock, int index) {
   if (FD_ISSET(sock, &poll_fds.except_fds)) poll_mode |= poll_mode_err;
   return poll_mode;
 }
-
-// TODO
-//  * Coordinate calls to send_callback_os_error with
-//    retrieving the correct error info from winsock.
-//  * Make sure calls to strerror (or perror?) will do
-//    what we want on windows.
 
 #endif
 
@@ -566,7 +599,7 @@ static void send_callback_error(msg_Conn *conn, const char *msg, void *to_free) 
 
 static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_free) {
   static char err_msg[1024];
-  snprintf(err_msg, 1024, "%s: %s", msg, strerror(errno));
+  snprintf(err_msg, 1024, "%s: %s", msg, err_str());
   send_callback_error(conn, err_msg, to_free);
 }
 
@@ -1019,8 +1052,6 @@ void msg_runloop(int timeout_in_ms) {
   }
   // End debug code.
 
-  // TODO CRITICAL Reset all fd_set data either just before or just after a call to check_poll_fds. (windows)
-
   int ret = 0;
   if (num_fds) ret = check_poll_fds(timeout_in_ms);
 
@@ -1098,6 +1129,7 @@ void msg_unlisten(msg_Conn *conn) {
   }
   if (closesocket(conn->socket) == -1) {
     int saved_errno = errno;
+    // TODO Make the fn name here more accurate (it's close on mac/linux and closesocket on windows).
     send_callback_os_error(conn, "close", NULL);
     if (saved_errno == err_bad_sock) return;  // Don't send msg_listening_ended since it didn't.
   }
