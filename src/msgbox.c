@@ -14,7 +14,7 @@
 #include <stdio.h>
 
 // Universal forward declarations for os-specific code.
-static CArray conns = NULL;     // msg_Conn * elements.
+static CArray conns    = NULL;  // msg_Conn * elements.
 static CArray removals = NULL;  // int elements; which conns to remove.
 
 static void CArrayRemoveAndFill (CArray array, int index);
@@ -136,7 +136,7 @@ static PollMode poll_fds_mode(int sock, int index) {
 #define ms_call_conv __stdcall
 
 typedef struct {
-  CArray    sockets;
+  CArray poll_modes;  // Same index as conns; PollMode elements.
   fd_set   read_fds;
   fd_set  write_fds;
   fd_set except_fds;
@@ -161,59 +161,49 @@ void library_init_() {
 static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
 
 static void remove_last_polling_conn() {
-  SOCKET s = CArrayElementOfType(poll_fds.sockets, poll_fds.sockets->count - 1, SOCKET);
-  FD_CLR(s, &poll_fds.read_fds);
-  FD_CLR(s, &poll_fds.write_fds);
-  FD_CLR(s, &poll_fds.except_fds);
   CArrayRemoveLast(conns);
-  CArrayRemoveLast(poll_fds.sockets);
+  CArrayRemoveLast(poll_fds.poll_modes);
 }
 
 static void init_poll_fds() {
-  poll_fds.sockets = CArrayNew(16, sizeof(SOCKET));
-  FD_ZERO(&poll_fds.read_fds);
-  FD_ZERO(&poll_fds.write_fds);
-  FD_ZERO(&poll_fds.except_fds);
+  poll_fds.poll_modes = CArrayNew(16, sizeof(PollMode));
+  // The fd_set elements are set before each select call within check_poll_fds. 
 }
 
 static void remove_from_poll_fds(int index) {
-  SOCKET s = CArrayElementOfType(poll_fds.sockets, index, SOCKET);
-  FD_CLR(s, &poll_fds.read_fds);
-  FD_CLR(s, &poll_fds.write_fds);
-  FD_CLR(s, &poll_fds.except_fds);
-  CArrayRemoveAndFill(poll_fds.sockets, index);
+  CArrayRemoveAndFill(poll_fds.poll_modes, index);
 }
 
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
-  *(SOCKET *)CArrayNewElement(poll_fds.sockets) = new_sock;
-  // TODO Update this for other possible poll_mode inputs.
-  FD_SET(new_sock, &poll_fds.read_fds);
-  FD_SET(new_sock, &poll_fds.except_fds);
+  *(PollMode *)CArrayNewElement(poll_fds.poll_modes) = poll_mode;
 }
 
 static const char *make_non_blocking(int sock) {
   u_long nonblocking_mode = 1;
   int ret_val = ioctlsocket(sock, FIONBIO, &nonblocking_mode);
   if (ret_val != 0) return "ioctlsocket";
-
   return NULL;  // Indicate success.
 }
 
-static void set_last_conn_to_write_poll_mode() {
-  SOCKET s = CArrayElementOfType(poll_fds.sockets, poll_fds.sockets->count - 1, SOCKET);
-  FD_CLR(s, &poll_fds.read_fds);
-  FD_SET(s, &poll_fds.write_fds);
-}
-
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
-  SOCKET s = CArrayElementOfType(poll_fds.sockets, index, SOCKET);
-  fd_set *from_set = poll_mode & poll_mode_read ? &poll_fds.write_fds : &poll_fds.read_fds;
-  fd_set *  to_set = poll_mode & poll_mode_read ? &poll_fds.read_fds :  &poll_fds.write_fds;
-  FD_CLR(s, from_set);
-  FD_SET(s,   to_set);
+  CArrayElementOfType(poll_fds.poll_modes, index, PollMode) = poll_mode;
 }
 
 static int check_poll_fds(int timeout_in_ms) {
+
+  // Set up the fd_set data.
+  FD_ZERO(&poll_fds.read_fds);
+  FD_ZERO(&poll_fds.write_fds);
+  FD_ZERO(&poll_fds.except_fds);
+  int i = 0;
+  CArrayFor(PollMode *, poll_mode, poll_fds.poll_modes) {
+    msg_Conn *conn = CArrayElementOfType(conns, i, msg_Conn *);
+    FD_SET(conn->socket, &poll_fds.except_fds);
+    FD_SET(conn->socket, *poll_mode == poll_mode_read ? &poll_fds.read_fds : &poll_fds.write_fds);
+    ++i;
+  }
+
+  // Set up the timeout and call select.
   const struct timeval timeout = { timeout_in_ms / 1000, (timeout_in_ms % 1000) * 1000 };
   return select(
     0,  // This is nfds, but is unused so the value doesn't matter.
