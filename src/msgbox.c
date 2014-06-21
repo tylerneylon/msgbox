@@ -1004,8 +1004,9 @@ static void open_socket(const char *address, void *conn_context,
   SocketOpener sys_open_sock = for_listening ? bind : connect;
   int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
   if (ret_val == -1) {
-    if (!for_listening && conn->protocol_type == msg_tcp && get_errno() == err_in_progress) {
-      // The err_in_progress error is ok; in that case we'll send msg_connection_ready later.
+    int in_progress = (get_errno() == err_in_progress || get_errno() == err_would_block);
+    if (!for_listening && conn->protocol_type == msg_tcp && in_progress) {
+      // Being in progress is ok in this case; we'll send msg_connection_ready later.
       set_conn_to_poll_mode(conns->count - 1, poll_mode_write);
       return;
     }
