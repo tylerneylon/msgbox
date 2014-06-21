@@ -48,6 +48,7 @@ typedef enum {
 #define err_invalid     EINVAL
 #define err_bad_sock    EBADF
 #define err_intr        EINTR
+#define err_conn_reset  ECONNRESET
 
 #define library_init
 
@@ -138,6 +139,7 @@ static PollMode poll_fds_mode(int sock, int index) {
 #define err_in_progress WSAEINPROGRESS
 #define err_bad_sock    WSAENOTSOCK
 #define err_intr        WSAEINTR
+#define err_conn_reset  WSAECONNRESET
 
 #define library_init library_init_()
 
@@ -714,7 +716,7 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
   if (conn->for_listening && conn->protocol_type == msg_udp) to_free = NULL;
   send_callback(conn, event, msg_no_data, to_free);
 
-  if (!conn->for_listening) close(conn->socket);
+  if (!conn->for_listening) closesocket(conn->socket);
 
   CArrayAddElement(removals, conn->index);
 }
@@ -724,14 +726,13 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
 static int read_header(int sock, msg_Conn *conn, Header *header) {
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
   int bytes_recvd = recv(sock, header, header_len, options);
+  if (bytes_recvd == 0 || (bytes_recvd == -1 && get_errno() == err_conn_reset)) {
+    local_disconnect(conn, msg_connection_lost);
+    return false;
+  }
   if (bytes_recvd == -1) {
     if (get_errno() == err_would_block) return false;
     send_callback_os_error(conn, "recv", NULL);
-    return false;
-  }
-
-  if (bytes_recvd == 0) {
-    local_disconnect(conn, msg_connection_lost);
     return false;
   }
 
@@ -793,11 +794,12 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
   msg_Data *buffer = &status->waiting_buffer;
   int default_options = 0;
   int bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
-  if (bytes_in == -1) return -1;
-  if (bytes_in == 0) {
+  if (bytes_in == 0 || (bytes_in == -1 && get_errno() == err_conn_reset)) {
     local_disconnect(conn, msg_connection_lost);
     return -2;
   }
+  if (bytes_in == -1) return -1;
+
   buffer->bytes     += bytes_in;
   buffer->num_bytes -= bytes_in;
   return buffer->num_bytes == 0;
