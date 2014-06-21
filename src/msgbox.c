@@ -67,6 +67,10 @@ typedef CArray poll_fds_t;
 // These arrays have corresponding elements at the same index.
 static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
 
+static int get_errno() {
+  return errno;
+}
+
 static char *err_str() {
   return strerror(errno);
 }
@@ -167,6 +171,10 @@ static const char *err_strs[] = {
   "WSAEHOSTUNREACH", "WSAENOTEMPTY", "WSAEPROCLIM", "WSAEUSERS",        // 10065 - 10068
   "WSAEDQUOT", "WSAESTALE", "WSAEREMOTE"                                // 10069 - 10071
 };
+
+static int get_errno() {
+  return WSAGetLastError();
+}
 
 static char *err_str() {
   int last_err = WSAGetLastError();
@@ -509,7 +517,7 @@ static int send_all(int socket, msg_Data data) {
   while (data.num_bytes > 0) {
     int default_send_options = 0;
     long just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
-    if (just_sent == -1 && errno == err_would_block) continue;
+    if (just_sent == -1 && get_errno() == err_would_block) continue;
     if (just_sent == -1) return -1;
     data.bytes += just_sent;
     data.num_bytes -= just_sent;
@@ -525,7 +533,7 @@ static int send_all(int socket, msg_Data data) {
 
 // Returns no_error (NULL) on success;
 // returns the name of the failing system call on error,
-// and errno holds the error code.
+// and get_errno() returns the error code.
 static char *send_data(msg_Conn *conn, msg_Data data) {
   int default_options = 0;
 
@@ -717,7 +725,7 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
   int bytes_recvd = recv(sock, header, header_len, options);
   if (bytes_recvd == -1) {
-    if (errno == err_would_block) return false;
+    if (get_errno() == err_would_block) return false;
     send_callback_os_error(conn, "recv", NULL);
     return false;
   }
@@ -814,7 +822,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       socklen_t addr_len = sizeof(remote_addr);
       int new_sock = accept(conn->socket, (struct sockaddr *)&remote_addr, &addr_len);
       if (new_sock == -1) {
-        if ( errno == err_would_block) return;
+        if (get_errno() == err_would_block) return;
 				return send_callback_os_error(conn, "accept", NULL);
 			}
 
@@ -994,7 +1002,7 @@ static void open_socket(const char *address, void *conn_context,
   SocketOpener sys_open_sock = for_listening ? bind : connect;
   int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
   if (ret_val == -1) {
-    if (!for_listening && conn->protocol_type == msg_tcp && errno == err_in_progress) {
+    if (!for_listening && conn->protocol_type == msg_tcp && get_errno() == err_in_progress) {
       // The err_in_progress error is ok; in that case we'll send msg_connection_ready later.
       set_conn_to_poll_mode(conns->count - 1, poll_mode_write);
       return;
@@ -1060,12 +1068,10 @@ void msg_runloop(int timeout_in_ms) {
     // we don't know which connection (and therefore which callback pointer) to use;
     // also, critical errors should only happen here due to bugs in msgbox itself.
     
-    // TODO Get the real errno on windows.
-    if (errno != err_intr && errno != err_in_progress) {
-      // These theoretically can only be my fault; still, let the user know.
-      fprintf(stderr, "Internal msgbox error during 'poll' call: %s\n", strerror(errno));
+    if (get_errno() != err_intr && get_errno() != err_in_progress) {
+      // This error case can theoretically only be my fault; still, let the user know.
+      fprintf(stderr, "Internal msgbox error during 'poll' call: %s\n", err_str());
     }
-    // Otherwise errno is EAGAIN or EINTR, both non-critical.
   } else if (ret > 0) {
     // TODO Check to see if we can override macros with effectively default parameter values. If yes, support an optional int index in CArrayFor.
     int i = 0;
@@ -1128,7 +1134,7 @@ void msg_unlisten(msg_Conn *conn) {
     return send_callback_error(conn, "msg_unlisten called on non-listening connection", NULL);
   }
   if (closesocket(conn->socket) == -1) {
-    int saved_errno = errno;
+    int saved_errno = get_errno();
     // TODO Make the fn name here more accurate (it's close on mac/linux and closesocket on windows).
     send_callback_os_error(conn, "close", NULL);
     if (saved_errno == err_bad_sock) return;  // Don't send msg_listening_ended since it didn't.
