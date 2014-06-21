@@ -1037,7 +1037,7 @@ void msg_runloop(int timeout_in_ms) {
 
   // Begin debug code.
   if (verbosity >= 1) {
-    char last_poll_state[4096];
+    static char last_poll_state[4096];
     char poll_state[4096];
     if (num_fds == 0) {
       strncpy(poll_state, "<nothing to poll>\n", 4096);
