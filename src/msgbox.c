@@ -26,6 +26,45 @@ typedef enum {
   poll_mode_err   = 4
 } PollMode;
 
+///////////////////////////////////////////////////////////////////////////////
+//  Debug mode setup.
+
+static int verbosity = 0;
+
+// This can be used in cases of emergency debugging.
+#define prline printf("%s:%d(%s)\n", __FILE__, __LINE__, __FUNCTION__)
+
+// This array is only used when DEBUG is defined.
+static int net_allocs[] = {0};  // Indexed by class.
+
+#ifdef DEBUG
+
+#include "memprofile.h"
+#include <assert.h>
+
+// Functions to assist in detecting memory leaks for tests.
+
+static void *alloc_class(size_t bytes, int class) {
+  ++net_allocs[class];
+  return malloc(bytes);
+}
+
+static void free_class(void *ptr, int class) {
+  --net_allocs[class];
+  free(ptr);
+}
+
+#else // non-DEBUG mode
+
+#define assert(x)
+#define alloc_class(bytes, class) malloc(bytes)
+#define free_class(ptr, class) free(ptr)
+
+#endif
+
+
+///////////////////////////////////////////////////////////////////////////////
+//  OS-specific code.
 
 #ifndef _WIN32
 
@@ -311,42 +350,6 @@ static PollMode poll_fds_mode(int sock, int index) {
 //
 // **. In read_header, be able to handle a partial head read (tcp only, I believe).
 
-
-///////////////////////////////////////////////////////////////////////////////
-//  Debug mode setup.
-
-static int verbosity = 0;
-
-// This can be used in cases of emergency debugging.
-#define prline printf("%s:%d(%s)\n", __FILE__, __LINE__, __FUNCTION__)
-
-// This array is only used when DEBUG is defined.
-static int net_allocs[] = {0};  // Indexed by class.
-
-#ifdef DEBUG
-
-#include "memprofile.h"
-#include <assert.h>
-
-// Functions to assist in detecting memory leaks for tests.
-
-static void *alloc_class(size_t bytes, int class) {
-  ++net_allocs[class];
-  return malloc(bytes);
-}
-
-static void free_class(void *ptr, int class) {
-  --net_allocs[class];
-  free(ptr);
-}
-
-#else // non-DEBUG mode
-
-#define assert(x)
-#define alloc_class(bytes, class) malloc(bytes)
-#define free_class(ptr, class) free(ptr)
-
-#endif
 
 #define true 1
 #define false 0
@@ -1036,6 +1039,11 @@ void msg_runloop(int timeout_in_ms) {
   init_if_needed();
 
   if (immediate_callbacks->count) { timeout_in_ms = 0; }  // Don't delay pending calls.
+
+  // Clear any conns marked for removal. Public functions work this way so they behave
+  // well if called by user functions invoked as callbacks.
+  CArrayFor(int *, index, removals) remove_conn_at(*index);
+  CArrayClear(removals);
   nfds_t num_fds = conns->count;
 
   // Begin debug code.
@@ -1136,14 +1144,14 @@ void msg_unlisten(msg_Conn *conn) {
   if (!conn->for_listening) {
     return send_callback_error(conn, "msg_unlisten called on non-listening connection", NULL);
   }
+  conn->for_listening = false;  // Tell local_disconnect to free the conn object, even on udp.
   if (closesocket(conn->socket) == -1) {
     int saved_errno = get_errno();
     // TODO Make the fn name here more accurate (it's close on mac/linux and closesocket on windows).
     send_callback_os_error(conn, "close", NULL);
     if (saved_errno == err_bad_sock) return;  // Don't send msg_listening_ended since it didn't.
   }
-  // TODO Remove conn from conns, poll_fds, and free the memory.
-  send_callback(conn, msg_listening_ended, msg_no_data, NULL);
+  local_disconnect(conn, msg_listening_ended);
 }
 
 void msg_disconnect(msg_Conn *conn) {
