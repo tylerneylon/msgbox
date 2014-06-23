@@ -288,11 +288,17 @@ callback, use `msg_as_str(data)` to get a human-friendly description of the prob
 
 ## Building and using
 
-The library can be used by including `msgbox.h` and linking with `libmsgbox.a`.
+Using the library in your code simply requires including `msgbox.h`.
 
-`msgbox.h` lives in the `src` directory.
+There are two ways to link with the library.
 
-Run `make` to build `libmsgbox.a` in the `out` directory.
+One way to link with `msgbox` is to copy the `msgbox`
+directory into your project and build/link its files as part
+of your build process.
+
+The other way to link with `msgbox` is to
+run `make` in the root of the `msgbox` repo, which will produce
+`out/libmsgbox.a`. This file can be linked with your code.
 
 Example of building and using:
 

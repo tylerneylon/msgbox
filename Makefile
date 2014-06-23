@@ -22,7 +22,7 @@ test_obj = out/ctest.o out/memprofile.o $(debug_obj)
 examples = $(addprefix out/,echo_client echo_server)
 
 # Variables for build settings.
-includes = -Isrc
+includes = -Imsgbox
 ifeq ($(shell uname -s), Darwin)
 	cflags = $(includes) -std=c99
 else
@@ -65,10 +65,10 @@ out/ctest.o: test/ctest.c test/ctest.h | out
 out/libmsgbox.a: $(release_obj)
 	ar cr $@ $^
 
-out/debug_%.o : src/%.c src/%.h | out
+out/debug_%.o : msgbox/%.c msgbox/%.h | out
 	$(cc) -o $@ -g -c $< -DDEBUG
 
-out/%.o : src/%.c src/%.h | out
+out/%.o : msgbox/%.c msgbox/%.h | out
 	$(cc) -o $@ -c $<
 
 $(tests) : out/% : test/%.c $(test_obj)
