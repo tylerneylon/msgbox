@@ -321,7 +321,7 @@ static int check_poll_fds(int timeout_in_ms) {
     &poll_fds.read_fds,
     &poll_fds.write_fds,
     &poll_fds.except_fds,
-    &timeout);
+    timeout_in_ms == -1 ? NULL : &timeout);  // -1 from caller tells us to block w/o timeout; NULL to select means the same.
 }
 
 // windows version
