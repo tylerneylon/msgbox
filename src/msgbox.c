@@ -81,13 +81,15 @@ static void free_class(void *ptr, int class) {
 #include <sys/types.h>
 #include <unistd.h>
 
-#define err_would_block EWOULDBLOCK
-#define err_in_progress EINPROGRESS
-#define err_fault       EFAULT
-#define err_invalid     EINVAL
-#define err_bad_sock    EBADF
-#define err_intr        EINTR
-#define err_conn_reset  ECONNRESET
+#define err_would_block  EWOULDBLOCK
+#define err_in_progress  EINPROGRESS
+#define err_fault        EFAULT
+#define err_invalid      EINVAL
+#define err_bad_sock     EBADF
+#define err_intr         EINTR
+#define err_conn_reset   ECONNRESET
+// This has an impossible value as it's a windows-only error.
+#define err_win_msg_size 1.5
 
 #define library_init
 
@@ -174,11 +176,13 @@ static PollMode poll_fds_mode(int sock, int index) {
 #include <ws2tcpip.h>
 #include "winutil.h"
 
-#define err_would_block WSAEWOULDBLOCK
-#define err_in_progress WSAEINPROGRESS
-#define err_bad_sock    WSAENOTSOCK
-#define err_intr        WSAEINTR
-#define err_conn_reset  WSAECONNRESET
+#define err_would_block  WSAEWOULDBLOCK
+#define err_in_progress  WSAEINPROGRESS
+#define err_bad_sock     WSAENOTSOCK
+#define err_intr         WSAEINTR
+#define err_conn_reset   WSAECONNRESET
+#define err_win_msg_size WSAEMSGSIZE
+
 
 #define library_init library_init_()
 
@@ -733,7 +737,8 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     local_disconnect(conn, msg_connection_lost);
     return false;
   }
-  if (bytes_recvd == -1) {
+  // Ignore err_win_msg_size as it only tells us that we didn't get the full udp message.
+  if (bytes_recvd == -1 && get_errno() != err_win_msg_size) {
     if (get_errno() == err_would_block) return false;
     send_callback_os_error(conn, "recv", NULL);
     return false;
