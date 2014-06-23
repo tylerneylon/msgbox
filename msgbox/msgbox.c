@@ -15,7 +15,7 @@
 
 // Universal forward declarations for os-specific code.
 static CArray conns    = NULL;  // msg_Conn * elements.
-static CArray removals = NULL;  // int elements; which conns to remove.
+static CArray removals = NULL;  // int elements; runloop removes these conns.
 
 static void CArrayRemoveAndFill (CArray array, int index);
 static void CArrayRemoveLast    (CArray array);
@@ -89,6 +89,7 @@ static void free_class(void *ptr, int class) {
 #define err_intr         EINTR
 #define err_conn_reset   ECONNRESET
 // This has an impossible value as it's a windows-only error.
+// The EMSGSIZE error has a similar name, but different meaning.
 #define err_win_msg_size 1.5
 
 #define library_init
@@ -104,10 +105,9 @@ typedef CArray poll_fds_t;
 #define closesocket close
 #define poll_fn_name "poll"
 
-// Declarations for the functions below.
-
-// These arrays have corresponding elements at the same index.
-static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
+// This array tracks sockets for run loop use.
+// Index-matched to the conns array.
+static poll_fds_t poll_fds = empty_poll_fds;
 
 // mac/linux version
 static int get_errno() {
@@ -259,10 +259,8 @@ static void library_init_() {
   if (err) fprintf(stderr, "Error: received error %d from WSAStartup.\n", err);
 }
 
-// Declarations for the functions below.
-
-// These arrays have corresponding elements at the same index.
-static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
+// This structure tracks sockets for run loop use.
+static poll_fds_t poll_fds = empty_poll_fds;
 
 // windows version
 static void remove_last_polling_conn() {
@@ -286,6 +284,7 @@ static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
   *(PollMode *)CArrayNewElement(poll_fds.poll_modes) = poll_mode;
 }
 
+// Returns NULL on success; otherwise returns the name of the failing system call.
 // windows version
 static const char *make_non_blocking(int sock) {
   u_long nonblocking_mode = 1;
@@ -351,15 +350,11 @@ static PollMode poll_fds_mode(int sock, int index) {
 // **. Add timeouts for msg_get.
 //
 // **. When we receive a request, ensure that next_reply_id is above its reply_id.
+//     (This would be in read_from_socket.)
 //
 // **. Avoid blocking in send_all; instead cache data that needs to be sent and
 //     dole it out from the run loop. In practice, I can track how often this ends up
 //     as a problem (maybe how often send returns 0) and use that to prioritize things.
-//
-// **. Check for error return values from send/sendto in all cases. That check is missing
-//     at very least in msg_send.
-//
-// **. Encapsulate all references to header_len.
 //
 // **. Clean up use of num_bytes in the header for udp, as it is not used consistently now.
 //
@@ -369,8 +364,6 @@ static PollMode poll_fds_mode(int sock, int index) {
 //
 // **. We currently send a tcp packet to indicate closure; modify this to use the standard
 //     tcp closing protocal - i.e. getting a 0 back from a valid recv call.
-//
-// **. Make sure msgbox sets conn->reply_id to 0 for every event except msg_request.
 //
 // **. In read_header, be able to handle a partial head read (tcp only, I believe).
 
@@ -395,7 +388,7 @@ typedef struct {
 
 static CArray immediate_callbacks = NULL;
 
-// Possible values for message_type
+// Possible values for message_type.
 enum {
   msg_type_one_way,
   msg_type_request,
@@ -417,8 +410,8 @@ typedef struct {
 //  Connection status map.
 
 typedef struct {
-  uint32_t ip;  // Stored in network byte-order.
-  uint16_t port;  // Stored in host byte-order.
+  uint32_t ip;    // Stored in network byte-order.
+  uint16_t port;  // Stored in host    byte-order.
   uint16_t protocol_type;
 } Address;
 
@@ -659,13 +652,13 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
   } else if (strncmp(address, udp_prefix, prefix_len) == 0) {
     conn->protocol_type = SOCK_DGRAM;
   } else {
-    // address has no recognizable prefix.
+    // The address has no recognizable prefix.
     snprintf(err_msg, 1024, "Failing due to unrecognized prefix: %s", address);
     return err_msg;
   }
 
   // Parse the ip substring in three steps.
-  // 1. Find start and end of the ip substring.
+  // 1. Find the start and end of the ip substring.
   const char *ip_start = address + prefix_len;
   char *colon = strchr(ip_start, ':');
   if (colon == NULL) {
@@ -760,7 +753,7 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     local_disconnect(conn, msg_connection_lost);
     return false;
   }
-  // Ignore err_win_msg_size as it only tells us that we didn't get the full udp message.
+  // We ignore err_win_msg_size; it only tells us that we didn't get the full udp message.
   if (bytes_recvd == -1 && get_errno() != err_win_msg_size) {
     if (get_errno() == err_would_block) return false;
     send_callback_os_error(conn, "recv", NULL);
@@ -817,9 +810,9 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
 }
 
 // Returns true when the entire message is received;
-// returns false when more data remains but no error occurred; and
-// returns -1 when there was an error - the caller must respond to it.
-// Returns -2 when a message was interrupted by a connection close.
+// returns false when more data remains but no error occurred;
+// returns -1 when there was an error - the caller must respond to it;
+// returns -2 when a message was interrupted by a connection close.
 static int continue_recv(msg_Conn *conn, ConnStatus *status) {
   int sock = conn->socket;
   msg_Data *buffer = &status->waiting_buffer;
@@ -931,6 +924,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
   switch (header->message_type) {
     case msg_type_one_way:
       event = msg_message;
+      conn->reply_id = 0;  // Avoid confusion about whether or not this is a reply.
       break;
     case msg_type_request:
       event = msg_request;
@@ -981,7 +975,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
 // Sets up sockaddr based on address. If an error occurs, the error callback
 // is scheduled.  Returns true on success.
-// conn and its polling fd are added the polling conns arrays on success.
+// conn and its polling socket are added to the conns and poll_fds data structures on success.
 static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg_Conn *conn) {
   const char *err_msg = parse_address_str(address, conn);
   if (err_msg) {
@@ -1149,7 +1143,7 @@ void msg_runloop(int timeout_in_ms) {
     if (call->to_free) free(call->to_free);
   }
 
-  // TODO handle timed callbacks such as heartbeats and get timeouts
+  // TODO Handle timed callbacks - such as heartbeats - and get timeouts.
   CArrayDelete(saved_immediate_callbacks);
 }
 
