@@ -738,10 +738,10 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
   void *to_free = is_listening_udp ? NULL : conn;
   send_callback(conn, event, msg_no_data, to_free);
 
-  if (!is_listening_udp) {
-    closesocket(conn->socket);
-    CArrayAddElement(removals, conn->index);
-  }
+  if (is_listening_udp) return;
+
+  closesocket(conn->socket);
+  CArrayAddElement(removals, conn->index);
 }
 
 // Reads the header of a udp packet.
