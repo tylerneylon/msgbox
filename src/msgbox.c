@@ -718,14 +718,17 @@ static void remove_conn_at(int index) {
 static void local_disconnect(msg_Conn *conn, msg_Event event) {
   Address *address = (Address *)(&conn->remote_ip);
   CMapUnset(conn_status, address);
-  void *to_free = conn;
-  // A listening udp msg_Conn lives until it is unlistened to.
-  if (conn->for_listening && conn->protocol_type == msg_udp) to_free = NULL;
+
+  // A listening udp conn is a special case as it lives until an unlisten call.
+  int is_listening_udp = (conn->for_listening && conn->protocol_type == msg_udp);
+
+  void *to_free = is_listening_udp ? NULL : conn;
   send_callback(conn, event, msg_no_data, to_free);
 
-  if (!conn->for_listening) closesocket(conn->socket);
-
-  CArrayAddElement(removals, conn->index);
+  if (!is_listening_udp) {
+    closesocket(conn->socket);
+    CArrayAddElement(removals, conn->index);
+  }
 }
 
 // Reads the header of a udp packet.
@@ -888,8 +891,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     if (!read_header(sock, conn, header)) return;
   }
 
-  if (0) {
-    // TODO Remove. Debug code.
+  if (false) {  // Debug code.
     char *msg_type_str[] = {
       "msg_type_one_way",
       "msg_type_request",
