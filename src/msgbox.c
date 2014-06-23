@@ -109,27 +109,33 @@ typedef CArray poll_fds_t;
 // These arrays have corresponding elements at the same index.
 static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
 
+// mac/linux version
 static int get_errno() {
   return errno;
 }
 
+// mac/linux version
 static char *err_str() {
   return strerror(errno);
 }
 
+// mac/linux version
 static void remove_last_polling_conn() {
   CArrayRemoveLast(conns);
   CArrayRemoveLast(poll_fds);
 }
 
+// mac/linux version
 static void init_poll_fds() {
   poll_fds = CArrayNew(8, sizeof(struct pollfd));
 }
 
+// mac/linux version
 static void remove_from_poll_fds(int index) {
   CArrayRemoveAndFill(poll_fds, index);
 }
 
+// mac/linux version
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
   short events = POLLIN;  // TODO Update this for other possible poll_mode inputs.
   struct pollfd *new_poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
@@ -139,6 +145,7 @@ static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
 }
 
 // Returns NULL on success; otherwise returns the name of the failing system call.
+// mac/linux version
 static const char *make_non_blocking(int sock) {
   int flags = fcntl(sock, F_GETFL, 0);
   if (flags == -1) return "fcntl";
@@ -149,16 +156,19 @@ static const char *make_non_blocking(int sock) {
   return NULL;  // Indicate success.
 }
 
+// mac/linux version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
   struct pollfd *poll_fd = CArrayElement(poll_fds, index);
   poll_fd->events = (poll_mode & poll_mode_read ? POLLIN : POLLOUT);
 }
 
+// mac/linux version
 static int check_poll_fds(int timeout_in_ms) {
   nfds_t num_fds = poll_fds->count;
   return poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
 }
 
+// mac/linux version
 static PollMode poll_fds_mode(int sock, int index) {
   PollMode poll_mode = 0;
   struct pollfd *poll_fd = (struct pollfd *)CArrayElement(poll_fds, index);
@@ -217,10 +227,12 @@ static const char *err_strs[] = {
   "WSAEDQUOT", "WSAESTALE", "WSAEREMOTE"                                // 10069 - 10071
 };
 
+// windows version
 static int get_errno() {
   return WSAGetLastError();
 }
 
+// windows version
 static char *err_str() {
   int last_err = WSAGetLastError();
   int unique_err_nums[] = { 10004, 10009, 10013, 10014, 10022, 10024 };
@@ -252,24 +264,29 @@ static void library_init_() {
 // These arrays have corresponding elements at the same index.
 static poll_fds_t poll_fds = empty_poll_fds;  // track sockets for run loop use
 
+// windows version
 static void remove_last_polling_conn() {
   CArrayRemoveLast(conns);
   CArrayRemoveLast(poll_fds.poll_modes);
 }
 
+// windows version
 static void init_poll_fds() {
   poll_fds.poll_modes = CArrayNew(16, sizeof(PollMode));
   // The fd_set elements are set before each select call within check_poll_fds. 
 }
 
+// windows version
 static void remove_from_poll_fds(int index) {
   CArrayRemoveAndFill(poll_fds.poll_modes, index);
 }
 
+// windows version
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
   *(PollMode *)CArrayNewElement(poll_fds.poll_modes) = poll_mode;
 }
 
+// windows version
 static const char *make_non_blocking(int sock) {
   u_long nonblocking_mode = 1;
   int ret_val = ioctlsocket(sock, FIONBIO, &nonblocking_mode);
@@ -277,10 +294,12 @@ static const char *make_non_blocking(int sock) {
   return NULL;  // Indicate success.
 }
 
+// windows version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
   CArrayElementOfType(poll_fds.poll_modes, index, PollMode) = poll_mode;
 }
 
+// windows version
 static int check_poll_fds(int timeout_in_ms) {
 
   // Set up the fd_set data.
@@ -305,6 +324,7 @@ static int check_poll_fds(int timeout_in_ms) {
     &timeout);
 }
 
+// windows version
 static PollMode poll_fds_mode(int sock, int index) {
   PollMode poll_mode = 0;
   if (FD_ISSET(sock, &poll_fds.read_fds))   poll_mode |= poll_mode_read;
