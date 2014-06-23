@@ -102,7 +102,7 @@ typedef CArray poll_fds_t;
 #define empty_poll_fds NULL
 
 #define closesocket close
-
+#define poll_fn_name "poll"
 
 // Declarations for the functions below.
 
@@ -195,8 +195,8 @@ static PollMode poll_fds_mode(int sock, int index) {
 
 
 #define library_init library_init_()
-
 #define ms_call_conv __stdcall
+#define poll_fn_name "select"
 
 typedef struct {
   CArray poll_modes;  // Same index as conns; PollMode elements.
@@ -1108,7 +1108,7 @@ void msg_runloop(int timeout_in_ms) {
     
     if (get_errno() != err_intr && get_errno() != err_in_progress) {
       // This error case can theoretically only be my fault; still, let the user know.
-      fprintf(stderr, "Internal msgbox error during 'poll' call: %s\n", err_str());
+      fprintf(stderr, "Internal msgbox error during '%s' call: %s\n", poll_fn_name, err_str());
     }
   } else if (ret > 0) {
     // TODO Check to see if we can override macros with effectively default parameter values. If yes, support an optional int index in CArrayFor.
