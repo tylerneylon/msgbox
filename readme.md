@@ -288,7 +288,7 @@ callback, use `msg_as_str(data)` to get a human-friendly description of the prob
 
 ## Building and using
 
-Using the library in your code simply requires including `msgbox.h`.
+Using the library in your code requires including `msgbox.h`.
 
 There are two ways to link with the library.
 
@@ -299,6 +299,9 @@ of your build process.
 The other way to link with `msgbox` is to
 run `make` in the root of the `msgbox` repo, which will produce
 `out/libmsgbox.a`. This file can be linked with your code.
+
+On windows, you must also link with `ws2_32.lib` or the
+corresponding dll.
 
 Example of building and using:
 
