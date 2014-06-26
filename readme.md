@@ -1,9 +1,6 @@
 # msgbox
 *A bite-sized tcp/udp library in pure C.*
 
-This library is at an early stage and may be
-a bit unstable.
-
 ## Motivation
 
 `msgbox` is a small C library that sends messages to other applications built with `msgbox`.
@@ -293,7 +290,8 @@ Using the library in your code requires including `msgbox.h`.
 There are two ways to link with the library.
 
 One way to link with `msgbox` is to copy the `msgbox`
-directory into your project and build/link its files as part
+and `cstructs`
+directories into your project and build/link these files as part
 of your build process.
 
 The other way to link with `msgbox` is to
