@@ -2,27 +2,26 @@
 #
 # The primary rules are:
 #
-# * all -- Builds everything in the out/ directory.
-# * test -- Builds and runs all tests, printing out the results.
+# * all      -- Builds everything in the out/ directory.
+# * test     -- Builds and runs all tests, printing out the results.
 # * examples -- Builds the examples in the out/ directory.
-# * clean -- Deletes everything this makefile may have created.
+# * clean    -- Deletes everything this makefile may have created.
 #
 
-# TODO Make sure the above comments are correct.
 # For now, there are no examples (add them).
 
 #################################################################################
 # Variables for targets.
 
 # Target lists.
-tests = out/msgbox_test
-cstructs_obj = CArray.o CMap.o CList.o memprofile.o
-cstructs_rel_obj = $(addprefix out/,$(cstructs_obj))
-cstructs_dbg_obj = $(addprefix out/debug_,$(cstructs_obj))
-release_obj = out/msgbox.o $(cstructs_rel_obj)
-debug_obj = out/debug_msgbox.o $(cstructs_dbg_obj)
-test_obj = out/ctest.o $(debug_obj)
-examples = $(addprefix out/,echo_client echo_server)
+tests            = out/msgbox_test
+cstructs_obj     = CArray.o CMap.o CList.o memprofile.o
+cstructs_rel_obj = $(addprefix out/,       $(cstructs_obj))
+cstructs_dbg_obj = $(addprefix out/debug_, $(cstructs_obj))
+release_obj      = out/msgbox.o       $(cstructs_rel_obj)
+debug_obj        = out/debug_msgbox.o $(cstructs_dbg_obj)
+test_obj         = out/ctest.o $(debug_obj)
+examples         = $(addprefix out/,echo_client echo_server)
 
 # Variables for build settings.
 includes = -Imsgbox -I.
