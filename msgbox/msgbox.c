@@ -1,6 +1,6 @@
 // msgbox.c
 //
-// See msgbox.h for an overview.
+// Home repo: https://github.com/tylerneylon/msgbox
 //
 
 #include "msgbox.h"

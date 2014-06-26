@@ -1,5 +1,7 @@
 // echo_client.c
 //
+// Home repo: https://github.com/tylerneylon/msgbox
+//
 // A client that sends a one-way message and then a request.
 //
 // After echo_server has been started, run it like so:

@@ -1,5 +1,7 @@
 // echo_server.c
 //
+// Home repo: https://github.com/tylerneylon/msgbox
+//
 // A server that repeats back requests and messages.
 //
 // Run it as in one of these two examples:
