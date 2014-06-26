@@ -7,9 +7,7 @@
 
 // Universal (windows/mac/linux) headers.
 
-#include "CArray.h"
-#include "CList.h"
-#include "CMap.h"
+#include "cstructs/cstructs.h"
 
 #include <stdio.h>
 
@@ -39,7 +37,7 @@ static int net_allocs[] = {0};  // Indexed by class.
 
 #ifdef DEBUG
 
-#include "memprofile.h"
+#include "cstructs/memprofile.h"
 #include <assert.h>
 
 // Functions to assist in detecting memory leaks for tests.

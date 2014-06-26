@@ -16,13 +16,16 @@
 
 # Target lists.
 tests = out/msgbox_test
-release_obj = $(addprefix out/,msgbox.o CArray.o CList.o CMap.o)
-debug_obj= $(addprefix out/debug_,msgbox.o CArray.o CList.o CMap.o)
-test_obj = out/ctest.o out/memprofile.o $(debug_obj)
+cstructs_obj = CArray.o CMap.o CList.o memprofile.o
+cstructs_rel_obj = $(addprefix out/,$(cstructs_obj))
+cstructs_dbg_obj = $(addprefix out/debug_,$(cstructs_obj))
+release_obj = out/msgbox.o $(cstructs_rel_obj)
+debug_obj = out/debug_msgbox.o $(cstructs_dbg_obj)
+test_obj = out/ctest.o $(debug_obj)
 examples = $(addprefix out/,echo_client echo_server)
 
 # Variables for build settings.
-includes = -Imsgbox
+includes = -Imsgbox -I.
 ifeq ($(shell uname -s), Darwin)
 	cflags = $(includes) -std=c99
 else
@@ -65,11 +68,17 @@ out/ctest.o: test/ctest.c test/ctest.h | out
 out/libmsgbox.a: $(release_obj)
 	ar cr $@ $^
 
-out/debug_%.o : msgbox/%.c msgbox/%.h | out
-	$(cc) -o $@ -g -c $< -DDEBUG
-
-out/%.o : msgbox/%.c msgbox/%.h | out
+$(cstructs_rel_obj) : out/%.o : cstructs/%.c cstructs/%.h | out
 	$(cc) -o $@ -c $<
+
+out/msgbox.o : msgbox/msgbox.c msgbox/msgbox.h | out
+	$(cc) -o $@ -c $<
+
+$(cstructs_dbg_obj) : out/debug_%.o : cstructs/%.c cstructs/%.h | out
+	$(cc) -o $@ -c $< -g -DDEBUG
+
+out/debug_msgbox.o : msgbox/msgbox.c msgbox/msgbox.h | out
+	$(cc) -o $@ -c $< -g -DDEBUG
 
 $(tests) : out/% : test/%.c $(test_obj)
 	$(cc) -o $@ -g $^ -lm
