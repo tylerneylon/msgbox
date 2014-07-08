@@ -231,7 +231,7 @@ static int get_errno() {
 }
 
 // windows version
-static char *err_str() {
+static const char *err_str() {
   int last_err = WSAGetLastError();
   int unique_err_nums[] = { 10004, 10009, 10013, 10014, 10022, 10024 };
   const char *unique_err_strs[] = {

@@ -7,14 +7,20 @@
 
 #include "ctest.h"
 
-#include <alloca.h>
-#include <execinfo.h>
-#include <libgen.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Platform-specific includes.
+#ifdef _WIN32
+#include "winutil.h"
+#else
+#include <alloca.h>
+#include <execinfo.h>
+#include <libgen.h>
+#endif
 
 
 ////////////////////////////////////////////////////////
@@ -32,11 +38,17 @@ static int log_is_verbose = 0;
 // Static (internal) function definitions.
 
 static void print_trace() {
+  // Windows doesn't give us easy access to stack traces. For more debug power,
+  // turn off the seg fault handler and run the test with visual
+  // studio's debug tools. Another option would be to integrate this class:
+  // http://stackwalker.codeplex.com/
+#ifndef _WIN32
   void *array[10];
   size_t size = backtrace(array, 10);
   char **strings = backtrace_symbols(array, size);
   for (size_t i = 0; i < size; ++i) test_printf("%s\n", strings[i]);
   free(strings);
+#endif
 }
 
 static void handle_seg_fault(int sig) {
@@ -100,17 +112,18 @@ int test_printf_(const char *format, ...) {
 
     static char buffer[LOG_SIZE];
     va_start(args, format);
-    int chars_out = vsnprintf(buffer, LOG_SIZE, format, args);
+    chars_printed = vsnprintf(buffer, LOG_SIZE, format, args);
     va_end(args);
 
-    size_t size_left = log_end - log_cursor - 1;  // Leave room for the last \0.
-    if (size_left < chars_out) {
+    long size_left = log_end - log_cursor - 1;  // Leave room for the last \0.
+    if (size_left < chars_printed) {
       // Truncate it if it's too long.
       buffer[size_left] = '\0';
-      chars_out = size_left;
+      chars_printed = size_left;
     }
-    strcpy(log_cursor, buffer);
-    log_cursor += chars_out;
+    // It's important that chars_out <= size_left here; the above code ensures this.
+    strncpy(log_cursor, buffer, chars_printed);
+    log_cursor += chars_printed;
   }
 
   return chars_printed;
@@ -140,9 +153,13 @@ void test_failed(char *reason_fmt, ...) {
   if (reason_fmt && strlen(reason_fmt)) {
     va_list args;
     va_start(args, reason_fmt);
-    char *fmt = alloca(strlen(reason_fmt) + 3);  // 3 chars for \, n, and \0.
-    sprintf(fmt, "%s\n", reason_fmt);
-    vprintf(fmt, args);
+
+    size_t fmt_size = strlen(reason_fmt) + 3;  // 3 chars for \, n, and \0.
+    char  *fmt      = alloca(fmt_size);
+
+    snprintf(fmt, fmt_size, "%s\n", reason_fmt);
+    vprintf (fmt, args);
+
     va_end(args);
   }
   printf("%s failed while running test %s.\n\n", program_name, test_name);

@@ -23,7 +23,8 @@ typedef struct CListStruct {
 typedef CListStruct *CList;
 
 void CListInsert(CList *list, void *element);
-void CListRemoveFirst(CList *list);
+void *CListRemoveFirst(CList *list);  // Returns the removed element; or NULL on empty lists.
+void *CListMoveFirst(CList *from, CList *to);  // Returns the moved element; NULL on empty lists.
 
 void CListDelete(CList *list);
 void CListDeleteAndRelease(CList *list, Releaser releaser);

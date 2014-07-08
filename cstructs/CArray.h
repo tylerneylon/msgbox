@@ -1,11 +1,11 @@
-//  CArray.h
+// CArray.h
 //
-//  Home repo: https://github.com/tylerneylon/cstructs
+// Home repo: https://github.com/tylerneylon/cstructs
 //
-//  A C structure for flexibly working with a sequence
-//  of elements that are kept contiguously in memory.
-//  The array length is flexible, and is designed to
-//  support nesting of data structures.
+// A C structure for flexibly working with a sequence
+// of elements that are kept contiguously in memory.
+// The array length is flexible, and is designed to
+// support nesting of data structures.
 //
 
 #ifndef __CARRAY_H__
@@ -15,7 +15,7 @@
 
 typedef void (*Releaser)(void *element);
 
-typedef struct CArray {
+typedef struct {
   int count;
   int capacity;
   size_t elementSize;
