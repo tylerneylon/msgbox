@@ -7,7 +7,7 @@
 
 // Universal (windows/mac/linux) headers.
 
-#include "cstructs/cstructs.h"
+#include "../cstructs/cstructs.h"
 
 #include <stdio.h>
 
@@ -37,7 +37,7 @@ static int net_allocs[] = {0};  // Indexed by class.
 
 #ifdef DEBUG
 
-#include "cstructs/memprofile.h"
+#include "../cstructs/memprofile.h"
 #include <assert.h>
 
 // Functions to assist in detecting memory leaks for tests.
@@ -564,12 +564,12 @@ static char *send_data(msg_Conn *conn, msg_Data data) {
   if (conn->protocol_type == msg_udp && conn->for_listening) {
     struct sockaddr_in sockaddr;
     set_sockaddr_for_conn(&sockaddr, conn);
-    int bytes_sent = sendto(conn->socket,
+    long bytes_sent = sendto(conn->socket,
         data.bytes - header_len, data.num_bytes + header_len, default_options,
         (struct sockaddr *)&sockaddr, sock_in_size);
     if (bytes_sent == -1) return "sendto";
   } else {
-    int bytes_sent = send(conn->socket,
+    long bytes_sent = send(conn->socket,
         data.bytes - header_len, data.num_bytes + header_len, default_options);
     if (bytes_sent == -1) return "send";
   }
@@ -746,7 +746,7 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
-  int bytes_recvd = recv(sock, header, header_len, options);
+  long bytes_recvd = recv(sock, header, header_len, options);
   if (bytes_recvd == 0 || (bytes_recvd == -1 && get_errno() == err_conn_reset)) {
     local_disconnect(conn, msg_connection_lost);
     return false;
@@ -815,7 +815,7 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
   int sock = conn->socket;
   msg_Data *buffer = &status->waiting_buffer;
   int default_options = 0;
-  int bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
+  long bytes_in = recv(sock, buffer->bytes, buffer->num_bytes, default_options);
   if (bytes_in == 0 || (bytes_in == -1 && get_errno() == err_conn_reset)) {
     local_disconnect(conn, msg_connection_lost);
     return -2;
@@ -944,7 +944,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     struct sockaddr_in remote_sockaddr;
     socklen_t remote_sockaddr_size = sock_in_size;
     int default_options = 0;
-    int bytes_recvd = recvfrom(sock, data.bytes - header_len,
+    long bytes_recvd = recvfrom(sock, data.bytes - header_len,
         data.num_bytes + header_len, default_options,
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
