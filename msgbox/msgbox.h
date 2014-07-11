@@ -1,6 +1,6 @@
 // msgbox.h
 //
-// Home repo: https://github.com/tylerneylon/msgbox
+// https://github.com/tylerneylon/msgbox
 //
 // A library to simplify working with tcp and udp messages.
 //
