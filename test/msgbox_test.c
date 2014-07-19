@@ -350,6 +350,7 @@ int basic_test(int protocol_type) {
   if (child_pid == 0) {
     // Child process.
     exit(server(protocol_type));
+    // TODO Test memory cleanliness (use net_allocs_for_class).
   } else {
     // Parent process.
     test_printf("Client pid=%d  server pid=%d\n", getpid(), child_pid);
@@ -383,6 +384,7 @@ int main(int argc, char **argv) {
   udp_port = rand() % 1024 + 1024;
   tcp_port = rand() % 1024 + 1024;
 
+  // TODO Rename this (and the end version) to start_of_all_tests for clarity.
   start_all_tests(argv[0]);
   run_tests(udp_test, tcp_test, long_string_test);
   return end_all_tests();
