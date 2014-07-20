@@ -1110,15 +1110,17 @@ void msg_runloop(int timeout_in_ms) {
     // It's difficult to send a standard error callback to the user here because
     // we don't know which connection (and therefore which callback pointer) to use;
     // also, critical errors should only happen here due to bugs in msgbox itself.
-    
+
     if (get_errno() != err_intr && get_errno() != err_in_progress) {
       // This error case can theoretically only be my fault; still, let the user know.
       fprintf(stderr, "Internal msgbox error during '%s' call: %s\n", poll_fn_name, err_str());
     }
   } else if (ret > 0) {
     // TODO Check to see if we can override macros with effectively default parameter values. If yes, support an optional int index in CArrayFor.
-    int i = 0;
+    int i = -1;
     CArrayFor(msg_Conn **, conn_ptr, conns) {
+      ++i;
+      // So i=0 the first time through.
       msg_Conn *conn = *conn_ptr;
       PollMode poll_mode = poll_fds_mode(conn->socket, i);
 
@@ -1137,8 +1139,6 @@ void msg_runloop(int timeout_in_ms) {
           set_errno(error);
           send_callback_os_error(conn, "connect", conn);
         }
-        // TODO This is fragile as we need to always execute ++i before the loop continues. Improve this.
-        ++i;
         continue;
       }
       if (poll_mode & poll_mode_write) {
@@ -1150,7 +1150,6 @@ void msg_runloop(int timeout_in_ms) {
         // TODO Why are the two params to read_from_socket separate, since conn->socket should always = the given fd?
         read_from_socket(conn->socket, conn);
       }
-      ++i;
     }
     CArrayFor(int *, index, removals) remove_conn_at(*index);
     CArrayClear(removals);
