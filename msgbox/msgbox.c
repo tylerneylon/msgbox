@@ -79,13 +79,15 @@ static void free_class(void *ptr, int class) {
 #include <sys/types.h>
 #include <unistd.h>
 
-#define err_would_block  EWOULDBLOCK
-#define err_in_progress  EINPROGRESS
-#define err_fault        EFAULT
-#define err_invalid      EINVAL
-#define err_bad_sock     EBADF
-#define err_intr         EINTR
-#define err_conn_reset   ECONNRESET
+#define err_would_block   EWOULDBLOCK
+#define err_in_progress   EINPROGRESS
+#define err_fault         EFAULT
+#define err_invalid       EINVAL
+#define err_bad_sock      EBADF
+#define err_intr          EINTR
+#define err_conn_reset    ECONNRESET
+#define err_conn_refused  ECONNREFUSED
+#define err_timed_out     ETIMEDOUT
 // This has an impossible value as it's a windows-only error.
 // The EMSGSIZE error has a similar name, but different meaning.
 #define err_win_msg_size 1.5
@@ -110,6 +112,10 @@ static poll_fds_t poll_fds = empty_poll_fds;
 // mac/linux version
 static int get_errno() {
   return errno;
+}
+
+static void set_errno(int err) {
+  errno = err;
 }
 
 // mac/linux version
@@ -157,7 +163,7 @@ static const char *make_non_blocking(int sock) {
 // mac/linux version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
   struct pollfd *poll_fd = CArrayElement(poll_fds, index);
-  poll_fd->events = (poll_mode & poll_mode_read ? POLLIN : POLLOUT);
+  poll_fd->events = ((poll_mode & poll_mode_read) ? POLLIN : POLLOUT);
 }
 
 // mac/linux version
@@ -184,12 +190,14 @@ static PollMode poll_fds_mode(int sock, int index) {
 #include <ws2tcpip.h>
 #include "winutil.h"
 
-#define err_would_block  WSAEWOULDBLOCK
-#define err_in_progress  WSAEINPROGRESS
-#define err_bad_sock     WSAENOTSOCK
-#define err_intr         WSAEINTR
-#define err_conn_reset   WSAECONNRESET
-#define err_win_msg_size WSAEMSGSIZE
+#define err_would_block   WSAEWOULDBLOCK
+#define err_in_progress   WSAEINPROGRESS
+#define err_bad_sock      WSAENOTSOCK
+#define err_intr          WSAEINTR
+#define err_conn_reset    WSAECONNRESET
+#define err_win_msg_size  WSAEMSGSIZE
+#define err_conn_refused  WSAECONNREFUSED
+#define err_timed_out     WSAETIMEDOUT
 
 
 #define library_init library_init_()
@@ -231,6 +239,11 @@ static int get_errno() {
 }
 
 // windows version
+static void set_errno(int err) {
+  WSASetLastError(err);
+}
+
+// windows version
 static const char *err_str() {
   int last_err = WSAGetLastError();
   int unique_err_nums[] = { 10004, 10009, 10013, 10014, 10022, 10024 };
@@ -269,7 +282,7 @@ static void remove_last_polling_conn() {
 // windows version
 static void init_poll_fds() {
   poll_fds.poll_modes = CArrayNew(16, sizeof(PollMode));
-  // The fd_set elements are set before each select call within check_poll_fds. 
+  // The fd_set elements are set before each select call within check_poll_fds.
 }
 
 // windows version
@@ -1114,6 +1127,19 @@ void msg_runloop(int timeout_in_ms) {
         if (poll_mode & poll_mode_err) {
           fprintf(stderr, "Error response from socket %d on poll or select call.\n", conn->socket);
         }
+      }
+      if (poll_mode & poll_mode_err) {
+        int error;
+        socklen_t error_len = sizeof(error);
+        getsockopt(conn->socket, SOL_SOCKET, SO_ERROR, &error, &error_len);
+        if (error == err_conn_refused || error == err_timed_out) {
+          CArrayAddElement(removals, conn->index);
+          set_errno(error);
+          send_callback_os_error(conn, "connect", conn);
+        }
+        // TODO This is fragile as we need to always execute ++i before the loop continues. Improve this.
+        ++i;
+        continue;
       }
       if (poll_mode & poll_mode_write) {
         // We only listen for this event when waiting for a tcp connect to complete.
