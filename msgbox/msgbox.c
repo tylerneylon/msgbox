@@ -190,6 +190,10 @@ static PollMode poll_fds_mode(int sock, int index) {
 #include <ws2tcpip.h>
 #include "winutil.h"
 
+// Allow void return values; useful for one-liners
+// that make a call and exit a function.
+#pragma warning (disable : 4098)
+
 #define err_would_block   WSAEWOULDBLOCK
 #define err_in_progress   WSAEINPROGRESS
 #define err_bad_sock      WSAENOTSOCK
