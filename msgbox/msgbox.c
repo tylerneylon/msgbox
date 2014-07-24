@@ -1137,7 +1137,8 @@ void msg_runloop(int timeout_in_ms) {
       if (poll_mode & poll_mode_err) {
         int error;
         socklen_t error_len = sizeof(error);
-        getsockopt(conn->socket, SOL_SOCKET, SO_ERROR, &error, &error_len);
+        // Send in (char *)&error as windows takes type char*; mac/linux takes type void*.
+        getsockopt(conn->socket, SOL_SOCKET, SO_ERROR, (char *)&error, &error_len);
         if (error == err_conn_refused || error == err_timed_out) {
           CArrayAddElement(removals, conn->index);
           set_errno(error);
