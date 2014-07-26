@@ -98,6 +98,8 @@ static void free_class(void *ptr, int class) {
 // calling convention when compiled on windows.
 #define ms_call_conv
 
+typedef int socket_t;
+
 typedef CArray poll_fds_t;
 
 #define empty_poll_fds NULL
@@ -215,8 +217,9 @@ typedef struct {
   fd_set except_fds;
 } poll_fds_t;
 
-typedef int socklen_t;
-typedef int nfds_t;
+typedef int    socklen_t;
+typedef int    nfds_t;
+typedef SOCKET socket_t;
 
 #define empty_poll_fds { NULL, NULL, NULL, NULL }
 
@@ -1021,7 +1024,7 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   return true;
 }
 
-typedef int (ms_call_conv *SocketOpener)(int, const struct sockaddr *, socklen_t);
+typedef int (ms_call_conv *SocketOpener)(socket_t, const struct sockaddr *, socklen_t);
 
 static void open_socket(const char *address, void *conn_context,
     msg_Callback callback, int for_listening) {
