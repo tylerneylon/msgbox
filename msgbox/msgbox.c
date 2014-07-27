@@ -102,14 +102,12 @@ typedef int socket_t;
 
 typedef CArray poll_fds_t;
 
-#define empty_poll_fds NULL
-
 #define closesocket close
 #define poll_fn_name "poll"
 
 // This array tracks sockets for run loop use.
 // Index-matched to the conns array.
-static poll_fds_t poll_fds = empty_poll_fds;
+static poll_fds_t poll_fds;
 
 // mac/linux version
 static int get_errno() {
@@ -188,6 +186,7 @@ static PollMode poll_fds_mode(int sock, int index) {
 
 // Windows setup.
 
+#include <process.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "winutil.h"
@@ -205,6 +204,8 @@ static PollMode poll_fds_mode(int sock, int index) {
 #define err_conn_refused  WSAECONNREFUSED
 #define err_timed_out     WSAETIMEDOUT
 
+// Consider adding this to winutil.h.
+#define getpid _getpid
 
 #define library_init library_init_()
 #define ms_call_conv __stdcall
@@ -220,8 +221,6 @@ typedef struct {
 typedef int    socklen_t;
 typedef int    nfds_t;
 typedef SOCKET socket_t;
-
-#define empty_poll_fds { NULL, NULL, NULL, NULL }
 
 // Most winsock api (WSA) errors are contiguous with codes 10035-10071.
 // This is the array of their names. The non-contiguous cases must be
@@ -278,7 +277,7 @@ static void library_init_() {
 }
 
 // This structure tracks sockets for run loop use.
-static poll_fds_t poll_fds = empty_poll_fds;
+static poll_fds_t poll_fds;
 
 // windows version
 static void remove_last_polling_conn() {
@@ -524,7 +523,7 @@ ConnStatus *status_of_conn(msg_Conn *conn) {
 
 static void print_bytes(char *bytes, size_t num_to_print) {
   printf("bytes (%zd) :", num_to_print);
-  for (int i = 0; i < num_to_print; ++i) {
+  for (size_t i = 0; i < num_to_print; ++i) {
     printf(" 0x%02X", bytes[i]);
   }
   printf("\n");
@@ -766,7 +765,8 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
   int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
-  long bytes_recvd = recv(sock, header, header_len, options);
+  // A (char *) header pointer works for all versions of recv, which take either char * or void *.
+  long bytes_recvd = recv(sock, (char *)header, header_len, options);
   if (bytes_recvd == 0 || (bytes_recvd == -1 && get_errno() == err_conn_reset)) {
     local_disconnect(conn, msg_connection_lost);
     return false;
