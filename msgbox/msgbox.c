@@ -1031,6 +1031,13 @@ static void open_socket(const char *address, void *conn_context,
     return remove_last_polling_conn();
   }
 
+  // On tcp, turn on SO_REUSEADDR for easier server restarts.
+  if (conn->protocol_type == msg_tcp) {
+    int optval = 1;
+    // Send in (char *)&optval as windows takes type char*; mac/linux takes type void*.
+    setsockopt(conn->socket, SOL_SOCKET, SO_REUSEADDR, (char *)&optval, sizeof(optval));
+  }
+
   char *sys_call_name = for_listening ? "bind" : "connect";
   SocketOpener sys_open_sock = for_listening ? bind : connect;
   int ret_val = sys_open_sock(conn->socket, (struct sockaddr *)sockaddr, sock_in_size);
