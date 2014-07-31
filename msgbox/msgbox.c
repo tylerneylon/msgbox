@@ -322,12 +322,10 @@ static int check_poll_fds(int timeout_in_ms) {
   FD_ZERO(&poll_fds.read_fds);
   FD_ZERO(&poll_fds.write_fds);
   FD_ZERO(&poll_fds.except_fds);
-  int i = 0;
-  CArrayFor(PollMode *, poll_mode, poll_fds.poll_modes) {
+  CArrayFor(PollMode *, poll_mode, poll_fds.poll_modes, i) {
     msg_Conn *conn = CArrayElementOfType(conns, i, msg_Conn *);
     FD_SET(conn->socket, &poll_fds.except_fds);
     FD_SET(conn->socket, *poll_mode == poll_mode_read ? &poll_fds.read_fds : &poll_fds.write_fds);
-    ++i;
   }
 
   // Set up the timeout and call select.
@@ -546,25 +544,16 @@ static void set_sockaddr_for_conn(struct sockaddr_in *sockaddr, msg_Conn *conn) 
 
 // Returns -1 on error; 0 on success, similar to a system call.
 static int send_all(int socket, msg_Data data) {
-  data.bytes -= header_len;
+  data.bytes     -= header_len;
   data.num_bytes += header_len;
-
-  // DEBUG
-  size_t orig_size = data.num_bytes;
-  char *orig_bytes = data.bytes;
 
   while (data.num_bytes > 0) {
     int default_send_options = 0;
     long just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
     if (just_sent == -1 && get_errno() == err_would_block) continue;
     if (just_sent == -1) return -1;
-    data.bytes += just_sent;
+    data.bytes     += just_sent;
     data.num_bytes -= just_sent;
-  }
-
-  if (0) {
-    printf("Just sent over the ");
-    print_bytes(orig_bytes, orig_size);
   }
 
   return 0;
@@ -1081,7 +1070,7 @@ void msg_runloop(int timeout_in_ms) {
 
   // Clear any conns marked for removal. Public functions work this way so they behave
   // well if called by user functions invoked as callbacks.
-  CArrayFor(int *, index, removals) remove_conn_at(*index);
+  CArrayFor(int *, index, removals, i) remove_conn_at(*index);
   CArrayClear(removals);
   nfds_t num_fds = conns->count;
 
@@ -1096,7 +1085,7 @@ void msg_runloop(int timeout_in_ms) {
       char *s_end = s + 4096;
       s += snprintf(s, s_end - s, "Polling %d socket%s:\n", (int)num_fds, num_fds > 1 ? "s" : "");
       s += snprintf(s, s_end - s, "  %-5s %-25s %-5s %s\n", "sock", "address", "type", "listening?");
-      CArrayFor(msg_Conn **, conn_ptr, conns) {
+      CArrayFor(msg_Conn **, conn_ptr, conns, i) {
         msg_Conn *conn = *conn_ptr;
         int   sock     = conn->socket;
         char *address  = address_as_str(address_of_conn(conn));
@@ -1123,11 +1112,7 @@ void msg_runloop(int timeout_in_ms) {
       fprintf(stderr, "Internal msgbox error during '%s' call: %s\n", poll_fn_name, err_str());
     }
   } else if (ret > 0) {
-    // TODO Check to see if we can override macros with effectively default parameter values. If yes, support an optional int index in CArrayFor.
-    int i = -1;
-    CArrayFor(msg_Conn **, conn_ptr, conns) {
-      ++i;
-      // So i=0 the first time through.
+    CArrayFor(msg_Conn **, conn_ptr, conns, i) {
       msg_Conn *conn = *conn_ptr;
       PollMode poll_mode = poll_fds_mode(conn->socket, i);
 
@@ -1159,7 +1144,7 @@ void msg_runloop(int timeout_in_ms) {
         read_from_socket(conn->socket, conn);
       }
     }
-    CArrayFor(int *, index, removals) remove_conn_at(*index);
+    CArrayFor(int *, index, removals, i) remove_conn_at(*index);
     CArrayClear(removals);
   }
 
@@ -1168,7 +1153,7 @@ void msg_runloop(int timeout_in_ms) {
   CArray saved_immediate_callbacks = immediate_callbacks;
   immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
 
-  CArrayFor(PendingCall *, call, saved_immediate_callbacks) {
+  CArrayFor(PendingCall *, call, saved_immediate_callbacks, i) {
     call->conn->callback(call->conn, call->event, call->data);
     if (call->data.bytes) msg_delete_data(call->data);
     if (call->to_free) free(call->to_free);
