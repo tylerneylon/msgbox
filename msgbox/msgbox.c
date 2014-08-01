@@ -1138,8 +1138,12 @@ void msg_runloop(int timeout_in_ms) {
           CArrayAddElement(removals, conn->index);
           set_errno(error);
           send_callback_os_error(conn, "connect", conn);
+          continue;
         }
-        continue;
+        // When the error is neither err_conn_refused nor err_timed_out, then we let the
+        // code continue as we may get something useful out of a possible poll_mode_read bit.
+        // For example, the error may have been from trying to send something to a remotely
+        // closed connection.
       }
       if (poll_mode & poll_mode_write) {
         // We only listen for this event when waiting for a tcp connect to complete.
