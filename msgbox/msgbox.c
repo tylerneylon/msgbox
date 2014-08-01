@@ -673,10 +673,10 @@ static const char *parse_address_str(const char *address, msg_Conn *conn) {
   }
 
   // 2. Check substring length and copy over so we can hand inet_pton a null-terminated version.
-  size_t ip_len = colon - ip_start;
+  long ip_len = colon - ip_start;
   if (ip_len > 15 || ip_len < 1) {
     snprintf(err_msg, 1024,
-        "Failing because ip length=%zd; expected to be 1-15 (in addresss '%s')",
+        "Failing because ip length=%ld; expected to be 1-15 (in addresss '%s')",
         ip_len, address);
     return err_msg;
   }
