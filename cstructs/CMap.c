@@ -68,10 +68,11 @@ KeyValuePair *CMapSet(CMap map, void *key, void *value) {
   KeyValuePair *pair;
   if (entry) {
     pair = (*entry)->element;
-    if (pair->value == value) return pair;
-    if (map->valueReleaser) map->valueReleaser(pair->value);
-    // TODO Release and reset pair->key if keyReleaser && pair->value != value.
+    if (map->keyReleaser && pair->key != key) map->keyReleaser(pair->key);
+    pair->key = key;
+    if (map->valueReleaser && pair->value != value) map->valueReleaser(pair->value);
     pair->value = value;
+    return pair;
   } else {
     // New pair.
     pair = map->pairAlloc(sizeof(KeyValuePair));
@@ -124,7 +125,7 @@ KeyValuePair *CMapNext(CMap map, int *i, void **p) {
     entry = *(CList *)CArrayElement(map->buckets, *i);
   }
   if (entry == NULL && *i == (map->buckets->count - 1)) {
-    *p = (void *)(intptr_t)(1);  // A token non-NULL pointer to end the outer loops.
+    *p = (void *)(1);  // A token non-NULL pointer to end the outer loops.
     return NULL;
   }
   void *element = entry->element;
