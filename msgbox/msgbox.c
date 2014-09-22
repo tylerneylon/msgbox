@@ -12,11 +12,11 @@
 #include <stdio.h>
 
 // Universal forward declarations for os-specific code.
-static CArray conns    = NULL;  // msg_Conn * elements.
-static CArray removals = NULL;  // int elements; runloop removes these conns.
+static Array conns    = NULL;  // msg_Conn * items.
+static Array removals = NULL;  // int items; runloop removes these conns.
 
-static void CArrayRemoveAndFill (CArray array, int index);
-static void CArrayRemoveLast    (CArray array);
+static void array__remove_and_fill (Array array, int index);
+static void array__remove_last    (Array array);
 
 typedef enum {
   poll_mode_read  = 1,
@@ -100,7 +100,7 @@ static void free_class(void *ptr, int class) {
 
 typedef int socket_t;
 
-typedef CArray poll_fds_t;
+typedef Array poll_fds_t;
 
 #define closesocket close
 #define poll_fn_name "poll"
@@ -125,24 +125,24 @@ static char *err_str() {
 
 // mac/linux version
 static void remove_last_polling_conn() {
-  CArrayRemoveLast(conns);
-  CArrayRemoveLast(poll_fds);
+  array__remove_last(conns);
+  array__remove_last(poll_fds);
 }
 
 // mac/linux version
 static void init_poll_fds() {
-  poll_fds = CArrayNew(8, sizeof(struct pollfd));
+  poll_fds = array__new(8, sizeof(struct pollfd));
 }
 
 // mac/linux version
 static void remove_from_poll_fds(int index) {
-  CArrayRemoveAndFill(poll_fds, index);
+  array__remove_and_fill(poll_fds, index);
 }
 
 // mac/linux version
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
   short events = POLLIN;  // TODO Update this for other possible poll_mode inputs.
-  struct pollfd *new_poll_fd = (struct pollfd *)CArrayNewElement(poll_fds);
+  struct pollfd *new_poll_fd = (struct pollfd *)array__new_item_ptr(poll_fds);
   new_poll_fd->fd      = new_sock;
   new_poll_fd->events  = events;
   new_poll_fd->revents = 0;  // Important since we may check this before we call poll.
@@ -162,20 +162,20 @@ static const char *make_non_blocking(int sock) {
 
 // mac/linux version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
-  struct pollfd *poll_fd = CArrayElement(poll_fds, index);
+  struct pollfd *poll_fd = array__item_ptr(poll_fds, index);
   poll_fd->events = ((poll_mode & poll_mode_read) ? POLLIN : POLLOUT);
 }
 
 // mac/linux version
 static int check_poll_fds(int timeout_in_ms) {
   nfds_t num_fds = poll_fds->count;
-  return poll((struct pollfd *)poll_fds->elements, num_fds, timeout_in_ms);
+  return poll((struct pollfd *)poll_fds->items, num_fds, timeout_in_ms);
 }
 
 // mac/linux version
 static PollMode poll_fds_mode(int sock, int index) {
   PollMode poll_mode = 0;
-  struct pollfd *poll_fd = (struct pollfd *)CArrayElement(poll_fds, index);
+  struct pollfd *poll_fd = (struct pollfd *)array__item_ptr(poll_fds, index);
   if (poll_fd->revents & POLLIN)                         poll_mode |= poll_mode_read;
   if (poll_fd->revents & POLLOUT)                        poll_mode |= poll_mode_write;
   if (poll_fd->revents & (POLLERR | POLLNVAL | POLLHUP)) poll_mode |= poll_mode_err;
@@ -212,7 +212,7 @@ static PollMode poll_fds_mode(int sock, int index) {
 #define poll_fn_name "select"
 
 typedef struct {
-  CArray poll_modes;  // Same index as conns; PollMode elements.
+  Array poll_modes;  // Same index as conns; PollMode items.
   fd_set   read_fds;
   fd_set  write_fds;
   fd_set except_fds;
@@ -281,24 +281,24 @@ static poll_fds_t poll_fds;
 
 // windows version
 static void remove_last_polling_conn() {
-  CArrayRemoveLast(conns);
-  CArrayRemoveLast(poll_fds.poll_modes);
+  array__remove_last(conns);
+  array__remove_last(poll_fds.poll_modes);
 }
 
 // windows version
 static void init_poll_fds() {
-  poll_fds.poll_modes = CArrayNew(16, sizeof(PollMode));
-  // The fd_set elements are set before each select call within check_poll_fds.
+  poll_fds.poll_modes = array__new(16, sizeof(PollMode));
+  // The fd_set items are set before each select call within check_poll_fds.
 }
 
 // windows version
 static void remove_from_poll_fds(int index) {
-  CArrayRemoveAndFill(poll_fds.poll_modes, index);
+  array__remove_and_fill(poll_fds.poll_modes, index);
 }
 
 // windows version
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
-  *(PollMode *)CArrayNewElement(poll_fds.poll_modes) = poll_mode;
+  *(PollMode *)array__new_item_ptr(poll_fds.poll_modes) = poll_mode;
 }
 
 // Returns NULL on success; otherwise returns the name of the failing system call.
@@ -312,7 +312,7 @@ static const char *make_non_blocking(int sock) {
 
 // windows version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
-  CArrayElementOfType(poll_fds.poll_modes, index, PollMode) = poll_mode;
+  array__item_val(poll_fds.poll_modes, index, PollMode) = poll_mode;
 }
 
 // windows version
@@ -322,8 +322,8 @@ static int check_poll_fds(int timeout_in_ms) {
   FD_ZERO(&poll_fds.read_fds);
   FD_ZERO(&poll_fds.write_fds);
   FD_ZERO(&poll_fds.except_fds);
-  CArrayFor(PollMode *, poll_mode, poll_fds.poll_modes, i) {
-    msg_Conn *conn = CArrayElementOfType(conns, i, msg_Conn *);
+  array__for(PollMode *, poll_mode, poll_fds.poll_modes, i) {
+    msg_Conn *conn = array__item_val(conns, i, msg_Conn *);
     FD_SET(conn->socket, &poll_fds.except_fds);
     FD_SET(conn->socket, *poll_mode == poll_mode_read ? &poll_fds.read_fds : &poll_fds.write_fds);
   }
@@ -401,7 +401,7 @@ typedef struct {
   void *to_free;
 } PendingCall;
 
-static CArray immediate_callbacks = NULL;
+static Array immediate_callbacks = NULL;
 
 // Possible values for message_type.
 enum {
@@ -469,7 +469,7 @@ int reply_id_eq(void *reply_id1, void *reply_id2) {
 
 typedef struct {
   double last_seen_at;
-  CMap reply_contexts;  // Map reply_id -> reply_context.
+  Map reply_contexts;  // Map reply_id -> reply_context.
   uint16_t next_reply_id;
 
   // These overlap; waiting_buffer is a suffix of total_buffer.
@@ -480,7 +480,7 @@ typedef struct {
 ConnStatus *new_conn_status(double now) {
   ConnStatus *status = calloc(1, sizeof(ConnStatus));
   status->last_seen_at = now;
-  status->reply_contexts = CMapNew(reply_id_hash, reply_id_eq);
+  status->reply_contexts = map__new(reply_id_hash, reply_id_eq);
   status->next_reply_id = 1;
   return status;
 }
@@ -499,19 +499,19 @@ static void delete_conn_status(void *status_v_ptr) {
   ConnStatus *status = (ConnStatus *)status_v_ptr;
   // This should be empty since we need to give the user a chance to free all contexts.
   assert(status->reply_contexts->count == 0);
-  CMapDelete(status->reply_contexts);
+  map__delete(status->reply_contexts);
 }
 
 // This maps Address -> ConnStatus.
 // The actual keys & values are pointers to those types,
 // and the releasers free them.
 // TODO Once heartbeats is added, let heartbeats own the ConnStatus objects.
-static CMap conn_status = NULL;
+static Map conn_status = NULL;
 
 // Returns NULL if the given remote address has no associated status.
 ConnStatus *status_of_conn(msg_Conn *conn) {
   Address *address = (Address *)(&conn->remote_ip);
-  KeyValuePair *pair = CMapFind(conn_status, address);
+  map__key_value *pair = map__find(conn_status, address);
   return pair ? (ConnStatus *)pair->value : NULL;
 }
 
@@ -584,17 +584,17 @@ static char *send_data(msg_Conn *conn, msg_Data data) {
   return no_error;
 }
 
-static void CArrayRemoveLast(CArray array) {
-  CArrayRemoveElement(array, CArrayElement(array, array->count - 1));
+static void array__remove_last(Array array) {
+  array__remove_item(array, array__item_ptr(array, array->count - 1));
 }
 
 // This releases array[index], sets array[index] = array[count - 1], and
 // shortens the array by 1. Effectively, it quickly removes an element.
-static void CArrayRemoveAndFill(CArray array, int index) {
-  void *elt = CArrayElement(array, index);
-  void *last_elt = CArrayElement(array, array->count - 1);
+static void array__remove_and_fill(Array array, int index) {
+  void *elt = array__item_ptr(array, index);
+  void *last_elt = array__item_ptr(array, array->count - 1);
   if (array->releaser) array->releaser(elt);
-  if (elt != last_elt) memcpy(elt, last_elt, array->elementSize);
+  if (elt != last_elt) memcpy(elt, last_elt, array->item_size);
   array->count--;
 }
 
@@ -612,21 +612,21 @@ static void init_if_needed() {
 
   library_init;
 
-  immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
-  conns    = CArrayNew(8, sizeof(msg_Conn *));
-  removals = CArrayNew(8, sizeof(int));
+  immediate_callbacks = array__new(16, sizeof(PendingCall));
+  conns    = array__new(8, sizeof(msg_Conn *));
+  removals = array__new(8, sizeof(int));
   init_poll_fds();
 
-  conn_status = CMapNew(address_hash, address_eq);
-  conn_status->keyReleaser = free;
-  conn_status->valueReleaser = delete_conn_status;
+  conn_status = map__new(address_hash, address_eq);
+  conn_status->key_releaser = free;
+  conn_status->value_releaser = delete_conn_status;
 
   init_done = true;
 }
 
 static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data, void *to_free) {
   PendingCall pending_callback = { .conn = conn, .event = event, .data = { data.num_bytes, data.bytes }, .to_free = to_free };
-  CArrayAddElement(immediate_callbacks, pending_callback);
+  array__add_item_val(immediate_callbacks, pending_callback);
 }
 
 static void send_callback_error(msg_Conn *conn, const char *msg, void *to_free) {
@@ -723,9 +723,9 @@ static void set_header(msg_Data data,
 }
 
 static void remove_conn_at(int index) {
-  CArrayRemoveAndFill(conns, index);
+  array__remove_and_fill(conns, index);
   if (index < conns->count) {
-    msg_Conn *filled_conn = CArrayElementOfType(conns, index, msg_Conn *);
+    msg_Conn *filled_conn = array__item_val(conns, index, msg_Conn *);
     filled_conn->index = index;
   }
 
@@ -736,7 +736,7 @@ static void remove_conn_at(int index) {
 // should be one of msg_connection_{closed,lost}.
 static void local_disconnect(msg_Conn *conn, msg_Event event) {
   Address *address = (Address *)(&conn->remote_ip);
-  CMapUnset(conn_status, address);
+  map__unset(conn_status, address);
 
   // A listening udp conn is a special case as it lives until an unlisten call.
   int is_listening_udp = (conn->for_listening && conn->protocol_type == msg_udp);
@@ -747,7 +747,7 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
   if (is_listening_udp) return;
 
   closesocket(conn->socket);
-  CArrayAddElement(removals, conn->index);
+  array__add_item_val(removals, conn->index);
 }
 
 // Reads the header of a udp packet.
@@ -798,9 +798,9 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
 
 static ConnStatus *remote_address_seen(msg_Conn *conn) {
   Address *address = address_of_conn(conn);
-  KeyValuePair *pair;
+  map__key_value *pair;
   ConnStatus *status;
-  if ((pair = CMapFind(conn_status, address))) {
+  if ((pair = map__find(conn_status, address))) {
     // TODO Update the timing data for this remote address.
     status = (ConnStatus *)pair->value;
   } else {
@@ -809,7 +809,7 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
     address = malloc(sizeof(Address));
     *address = *address_of_conn(conn);
 
-    CMapSet(conn_status, address, status);
+    map__set(conn_status, address, status);
     send_callback(conn, msg_connection_ready, msg_no_data, NULL);
   }
 
@@ -865,7 +865,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       new_conn->remote_port   = ntohs(remote_addr.sin_port);
       new_conn->protocol_type = conn->protocol_type;
       new_conn->index         = conns->count;
-      CArrayAddElement(conns, new_conn);
+      array__add_item_val(conns, new_conn);
 
       add_to_poll_fds(new_sock, poll_mode_read);
 
@@ -967,12 +967,12 @@ static void read_from_socket(int sock, msg_Conn *conn) {
   // Look up a reply_context if it's a reply.
   if (header->message_type == msg_type_reply) {
     void *reply_id_key = (void *)(intptr_t)header->reply_id;
-    KeyValuePair *pair = CMapFind(status->reply_contexts, reply_id_key);
+    map__key_value *pair = map__find(status->reply_contexts, reply_id_key);
     if (pair == NULL) {
       return send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
     }
     conn->reply_context = pair->value;
-    CMapUnset(status->reply_contexts, reply_id_key);
+    map__unset(status->reply_contexts, reply_id_key);
   } else {
     conn->reply_context = NULL;
   }
@@ -1000,7 +1000,7 @@ static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg
   // We have a real socket, so add entries to both poll_fds and conns.
   conn->socket = sock;
   conn->index  = conns->count;
-  CArrayAddElement(conns, conn);
+  array__add_item_val(conns, conn);
 
   add_to_poll_fds(sock, poll_mode_read);
 
@@ -1077,8 +1077,8 @@ void msg_runloop(int timeout_in_ms) {
 
   // Clear any conns marked for removal. Public functions work this way so they behave
   // well if called by user functions invoked as callbacks.
-  CArrayFor(int *, index, removals, i) remove_conn_at(*index);
-  CArrayClear(removals);
+  array__for(int *, index, removals, i) remove_conn_at(*index);
+  array__clear(removals);
   nfds_t num_fds = conns->count;
 
   // Begin debug code.
@@ -1092,7 +1092,7 @@ void msg_runloop(int timeout_in_ms) {
       char *s_end = s + 4096;
       s += snprintf(s, s_end - s, "Polling %d socket%s:\n", (int)num_fds, num_fds > 1 ? "s" : "");
       s += snprintf(s, s_end - s, "  %-5s %-25s %-5s %s\n", "sock", "address", "type", "listening?");
-      CArrayFor(msg_Conn **, conn_ptr, conns, i) {
+      array__for(msg_Conn **, conn_ptr, conns, i) {
         msg_Conn *conn = *conn_ptr;
         int   sock     = conn->socket;
         char *address  = address_as_str(address_of_conn(conn));
@@ -1119,7 +1119,7 @@ void msg_runloop(int timeout_in_ms) {
       fprintf(stderr, "Internal msgbox error during '%s' call: %s\n", poll_fn_name, err_str());
     }
   } else if (ret > 0) {
-    CArrayFor(msg_Conn **, conn_ptr, conns, i) {
+    array__for(msg_Conn **, conn_ptr, conns, i) {
       msg_Conn *conn = *conn_ptr;
       PollMode poll_mode = poll_fds_mode(conn->socket, i);
 
@@ -1135,7 +1135,7 @@ void msg_runloop(int timeout_in_ms) {
         // Send in (char *)&error as windows takes type char*; mac/linux takes type void*.
         getsockopt(conn->socket, SOL_SOCKET, SO_ERROR, (char *)&error, &error_len);
         if (error == err_conn_refused || error == err_timed_out) {
-          CArrayAddElement(removals, conn->index);
+          array__add_item_val(removals, conn->index);
           set_errno(error);
           send_callback_os_error(conn, "connect", conn);
           continue;
@@ -1155,23 +1155,23 @@ void msg_runloop(int timeout_in_ms) {
         read_from_socket(conn->socket, conn);
       }
     }
-    CArrayFor(int *, index, removals, i) remove_conn_at(*index);
-    CArrayClear(removals);
+    array__for(int *, index, removals, i) remove_conn_at(*index);
+    array__clear(removals);
   }
 
   // Save the state of pending callbacks so that users can add new callbacks
   // from within their callbacks.
-  CArray saved_immediate_callbacks = immediate_callbacks;
-  immediate_callbacks = CArrayNew(16, sizeof(PendingCall));
+  Array saved_immediate_callbacks = immediate_callbacks;
+  immediate_callbacks = array__new(16, sizeof(PendingCall));
 
-  CArrayFor(PendingCall *, call, saved_immediate_callbacks, i) {
+  array__for(PendingCall *, call, saved_immediate_callbacks, i) {
     call->conn->callback(call->conn, call->event, call->data);
     if (call->data.bytes) msg_delete_data(call->data);
     if (call->to_free) free(call->to_free);
   }
 
   // TODO Handle timed callbacks - such as heartbeats - and get timeouts.
-  CArrayDelete(saved_immediate_callbacks);
+  array__delete(saved_immediate_callbacks);
 }
 
 void msg_listen(const char *address, void *conn_context, msg_Callback callback) {
@@ -1232,7 +1232,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
     return send_callback_error(conn, err_msg, NULL);
   }
   int reply_id = status->next_reply_id++;
-  CMapSet(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
+  map__set(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
 
   // Set up the header.
   set_header(data, msg_type_request, reply_id, (uint32_t)data.num_bytes);

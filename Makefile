@@ -15,7 +15,7 @@
 
 # Target lists.
 tests            = out/msgbox_test
-cstructs_obj     = CArray.o CMap.o CList.o memprofile.o
+cstructs_obj     = array.o map.o list.o memprofile.o
 cstructs_rel_obj = $(addprefix out/,       $(cstructs_obj))
 cstructs_dbg_obj = $(addprefix out/debug_, $(cstructs_obj))
 release_obj      = out/msgbox.o       $(cstructs_rel_obj)
