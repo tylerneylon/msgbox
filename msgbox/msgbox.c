@@ -16,7 +16,7 @@ static Array conns    = NULL;  // msg_Conn * items.
 static Array removals = NULL;  // int items; runloop removes these conns.
 
 static void array__remove_and_fill (Array array, int index);
-static void array__remove_last    (Array array);
+static void array__remove_last     (Array array);
 
 typedef enum {
   poll_mode_read  = 1,
@@ -420,6 +420,18 @@ typedef struct {
 
 #define header_len 8
 
+// Items related to udp get timeouts.
+
+#define udp_timeout_seconds 1
+
+typedef struct {
+  double timeout_hits_at;
+  msg_Conn *conn;
+  void *reply_context;
+} Timeout;
+
+static Array timeouts;  // Items have type Timeout.
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Connection status map.
@@ -615,6 +627,7 @@ static void init_if_needed() {
   immediate_callbacks = array__new(16, sizeof(PendingCall));
   conns    = array__new(8, sizeof(msg_Conn *));
   removals = array__new(8, sizeof(int));
+  timeouts = array__new(8, sizeof(Timeout));
   init_poll_fds();
 
   conn_status = map__new(address_hash, address_eq);
