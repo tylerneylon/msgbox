@@ -425,7 +425,7 @@ typedef struct {
 #define udp_timeout_seconds 1
 
 typedef struct {
-  double timeout_hits_at;
+  double hits_at;
   msg_Conn *conn;
   void *reply_context;
 } Timeout;
@@ -581,7 +581,8 @@ static char *send_data(msg_Conn *conn, msg_Data data) {
     return send_all(conn->socket, data) ? "send" : no_error;
   }
 
-  if (conn->protocol_type == msg_udp && conn->for_listening) {
+  // At this point we expect protocol_type to be udp.
+  if (conn->for_listening) {
     struct sockaddr_in sockaddr;
     set_sockaddr_for_conn(&sockaddr, conn);
     long bytes_sent = sendto(conn->socket,
@@ -1251,7 +1252,11 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   set_header(data, msg_type_request, reply_id, (uint32_t)data.num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
-  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
+  if (failed_sys_call) {
+    send_callback_os_error(conn, failed_sys_call, NULL);
+  } else {
+    // TODO Set up a new Timeout object.
+  }
 }
 
 char *msg_as_str(msg_Data data) {

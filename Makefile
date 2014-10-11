@@ -18,8 +18,8 @@ tests            = out/msgbox_test
 cstructs_obj     = array.o map.o list.o memprofile.o
 cstructs_rel_obj = $(addprefix out/,       $(cstructs_obj))
 cstructs_dbg_obj = $(addprefix out/debug_, $(cstructs_obj))
-release_obj      = out/msgbox.o       $(cstructs_rel_obj)
-debug_obj        = out/debug_msgbox.o $(cstructs_dbg_obj)
+release_obj      = out/msgbox.o out/msgbox_now.o $(cstructs_rel_obj)
+debug_obj        = out/debug_msgbox.o out/msgbox_now.o $(cstructs_dbg_obj)
 test_obj         = out/ctest.o $(debug_obj)
 examples         = $(addprefix out/,echo_client echo_server)
 
@@ -66,6 +66,9 @@ out/ctest.o: test/ctest.c test/ctest.h | out
 
 out/libmsgbox.a: $(release_obj)
 	ar cr $@ $^
+
+out/msgbox_now.o: msgbox/msgbox_now.c msgbox/msgbox_now.h
+	$(cc) -o $@ -c $<
 
 $(cstructs_rel_obj) : out/%.o : cstructs/%.c cstructs/%.h | out
 	$(cc) -o $@ -c $<
