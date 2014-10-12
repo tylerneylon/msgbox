@@ -8,6 +8,7 @@
 // Universal (windows/mac/linux) headers.
 
 #include "../cstructs/cstructs.h"
+#include "msgbox_now.h"
 
 #include <stdio.h>
 
@@ -23,6 +24,7 @@ typedef enum {
   poll_mode_write = 2,
   poll_mode_err   = 4
 } PollMode;
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Debug mode setup.
@@ -142,7 +144,7 @@ static void remove_from_poll_fds(int index) {
 // mac/linux version
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
   short events = POLLIN;  // TODO Update this for other possible poll_mode inputs.
-  struct pollfd *new_poll_fd = (struct pollfd *)array__new_item_ptr(poll_fds);
+  struct pollfd *new_poll_fd = (struct pollfd *)array__new_ptr(poll_fds);
   new_poll_fd->fd      = new_sock;
   new_poll_fd->events  = events;
   new_poll_fd->revents = 0;  // Important since we may check this before we call poll.
@@ -298,7 +300,7 @@ static void remove_from_poll_fds(int index) {
 
 // windows version
 static void add_to_poll_fds(int new_sock, PollMode poll_mode) {
-  *(PollMode *)array__new_item_ptr(poll_fds.poll_modes) = poll_mode;
+  array__new_val(poll_fds.poll_modes, PollMode) = poll_mode;
 }
 
 // Returns NULL on success; otherwise returns the name of the failing system call.
@@ -420,18 +422,6 @@ typedef struct {
 
 #define header_len 8
 
-// Items related to udp get timeouts.
-
-#define udp_timeout_seconds 1
-
-typedef struct {
-  double hits_at;
-  msg_Conn *conn;
-  void *reply_context;
-} Timeout;
-
-static Array timeouts;  // Items have type Timeout.
-
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Connection status map.
@@ -525,6 +515,41 @@ ConnStatus *status_of_conn(msg_Conn *conn) {
   Address *address = (Address *)(&conn->remote_ip);
   map__key_value *pair = map__find(conn_status, address);
   return pair ? (ConnStatus *)pair->value : NULL;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//  Timeout functionality.
+
+#define udp_timeout_sec 1
+
+typedef struct {
+  double      at;
+  msg_Conn *  conn;
+  ConnStatus *status;
+  uint16_t    reply_id;
+} Timeout;
+
+static Array timeouts = NULL;  // Items have type Timeout.
+
+#define make_timeout(a, c, s, r) ((Timeout){ .at = a, .conn = c, .status = s, .reply_id = r })
+
+static void add_timeout(msg_Conn *conn, ConnStatus *status, uint16_t reply_id) {
+  // This is called from msg_get, which takes responsibility for making sure
+  // that status exists.
+  Timeout *timeout = malloc(sizeof(Timeout));
+  double timeout_at = now() + udp_timeout_sec;
+  array__new_val(timeouts, Timeout) = make_timeout(timeout_at, conn, status, reply_id);
+}
+
+// Remove the given timeout if it can be found.
+static void remove_timeout(ConnStatus *status, uint16_t reply_id) {
+  array__for(Timeout *, timeout, timeouts, i) {
+    if (timeout->status != status || timeout->reply_id != reply_id) continue;
+    // At this point, we've found the given timeout.
+    array__remove_item(timeouts, timeout);
+    break;
+  }
 }
 
 
@@ -985,6 +1010,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     if (pair == NULL) {
       return send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
     }
+    remove_timeout(status, header->reply_id);
     conn->reply_context = pair->value;
     map__unset(status->reply_contexts, reply_id_key);
   } else {
@@ -1173,6 +1199,24 @@ void msg_runloop(int timeout_in_ms) {
     array__clear(removals);
   }
 
+  // Check for any unreplied-to udp requests that have timed out.
+  double time_now = now();
+  array__for(Timeout *, timeout, timeouts, i) {
+    // The timeouts are sorted soonest-first; stop as soon as one is not in the past.
+    if (timeout->at > time_now) break;
+    
+    // Remove the pending status information and inform the user of the timeout.
+    void *reply_id_key = (void *)(intptr_t)timeout->reply_id;
+    map__key_value *pair = map__find(timeout->status->reply_contexts, reply_id_key);
+    assert(pair);  // Since we set up the timeout ourselves, it should exist in the status.
+    msg_Conn *conn = timeout->conn;  // Save conn as timeout will soon be freed.
+    conn->reply_context = pair->value;
+    map__unset(timeout->status->reply_contexts, reply_id_key);
+    array__remove_item(timeouts, timeout);
+    i--;  // Back up one item so the next iteration gets the next item.
+    send_callback_error(conn, "udp get timed out", NULL);
+  }
+
   // Save the state of pending callbacks so that users can add new callbacks
   // from within their callbacks.
   Array saved_immediate_callbacks = immediate_callbacks;
@@ -1245,7 +1289,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
     snprintf(err_msg, 1024, "No known connection with %s", address_as_str(address_of_conn(conn)));
     return send_callback_error(conn, err_msg, NULL);
   }
-  int reply_id = status->next_reply_id++;
+  uint16_t reply_id = status->next_reply_id++;
   map__set(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
 
   // Set up the header.
@@ -1255,7 +1299,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   if (failed_sys_call) {
     send_callback_os_error(conn, failed_sys_call, NULL);
   } else {
-    // TODO Set up a new Timeout object.
+    add_timeout(conn, status, reply_id);
   }
 }
 
