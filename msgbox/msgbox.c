@@ -536,7 +536,6 @@ static Array timeouts = NULL;  // Items have type Timeout.
 
 static void add_timeout(msg_Conn *conn, ConnStatus *status, uint16_t reply_id) {
   // This is called from msg_get, which takes responsibility for making sure status exists.
-  Timeout *timeout = malloc(sizeof(Timeout));
   double timeout_at = now() + udp_timeout_sec;
   array__new_val(timeouts, Timeout) = make_timeout(timeout_at, conn, status, reply_id);
 }
