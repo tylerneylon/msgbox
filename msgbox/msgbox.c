@@ -535,8 +535,7 @@ static Array timeouts = NULL;  // Items have type Timeout.
 #define make_timeout(a, c, s, r) ((Timeout){ .at = a, .conn = c, .status = s, .reply_id = r })
 
 static void add_timeout(msg_Conn *conn, ConnStatus *status, uint16_t reply_id) {
-  // This is called from msg_get, which takes responsibility for making sure
-  // that status exists.
+  // This is called from msg_get, which takes responsibility for making sure status exists.
   Timeout *timeout = malloc(sizeof(Timeout));
   double timeout_at = now() + udp_timeout_sec;
   array__new_val(timeouts, Timeout) = make_timeout(timeout_at, conn, status, reply_id);
@@ -1204,7 +1203,7 @@ void msg_runloop(int timeout_in_ms) {
   array__for(Timeout *, timeout, timeouts, i) {
     // The timeouts are sorted soonest-first; stop as soon as one is not in the past.
     if (timeout->at > time_now) break;
-    
+
     // Remove the pending status information and inform the user of the timeout.
     void *reply_id_key = (void *)(intptr_t)timeout->reply_id;
     map__key_value *pair = map__find(timeout->status->reply_contexts, reply_id_key);

@@ -20,7 +20,7 @@ double now() {
 double now() {
   struct timeval t;
   gettimeofday(&t, NULL);  // 2nd param = optional time zone pointer.
-  return (double)t.tv_sec + 1e6 * (double)t.tv_usec;
+  return (double)t.tv_sec + 1e-6 * (double)t.tv_usec;
 }
 
 #endif
