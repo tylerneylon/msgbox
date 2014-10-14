@@ -1011,6 +1011,8 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     remove_timeout(status, header->reply_id);
     conn->reply_context = pair->value;
     map__unset(status->reply_contexts, reply_id_key);
+    // Clear reply_id so a nested msg_send isn't interpreted as a reply itself.
+    conn->reply_id = 0;
   } else {
     conn->reply_context = NULL;
   }
