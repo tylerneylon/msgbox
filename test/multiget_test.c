@@ -18,9 +18,6 @@
 
 #include "ctest.h"
 
-// TODO Drop any unneeded includes here.
-#include <errno.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +29,7 @@
 
 #define array_size(x) (sizeof(x) / sizeof(x[0]))
 
-#define true 1
+#define true  1
 #define false 0
 
 // This can be used in cases of emergency debugging.
