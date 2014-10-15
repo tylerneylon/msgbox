@@ -15,11 +15,31 @@
 
 #pragma once
 
+#ifndef true
+#define true  1
+#define false 0
+#endif
+
 #ifdef _WIN32
+
+#include <windows.h>
 
 // windows version
 static double now() {
-  // TODO
+  static double counts_per_sec;
+
+  static int is_initialized = false;
+  if (!is_initialized) {
+    LARGE_INTEGER counts_per_sec_int;
+    QueryPerformanceFrequency(&counts_per_sec_int);
+    counts_per_sec = (double)counts_per_sec_int.QuadPart;
+    is_initialized = true;
+  }
+
+  LARGE_INTEGER counts;
+  QueryPerformanceCounter(&counts);
+  double seconds = (double)counts.QuadPart / counts_per_sec;
+  return seconds;
 }
 
 #else

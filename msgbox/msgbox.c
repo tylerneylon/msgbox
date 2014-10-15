@@ -8,7 +8,6 @@
 // Universal (windows/mac/linux) headers.
 
 #include "../cstructs/cstructs.h"
-#include "msgbox_now.h"
 
 #include <stdio.h>
 
@@ -350,6 +349,11 @@ static PollMode poll_fds_mode(int sock, int index) {
 }
 
 #endif
+
+// Windows has dependencies around the order of included header files making
+// the code simpler if we include msgbox_now here rather than before the
+// windows-specific section.
+#include "msgbox_now.h"
 
 
 ///////////////////////////////////////////////////////////////////////////////
