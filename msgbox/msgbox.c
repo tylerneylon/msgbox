@@ -161,6 +161,34 @@ static const char *make_non_blocking(int sock) {
   return NULL;  // Indicate success.
 }
 
+/////
+// This section is all about avoiding SIGPIPE on sends to a broken socket.
+
+#ifdef __APPLE__
+
+// mac version
+static int avoid_sigpipe(int sock) {
+  int set = 1;
+  return setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+}
+
+#define send_flags 0
+
+#else
+
+// linux version
+static int avoid_sigpipe(int sock) {
+  // On linux, the send flags will avoid SIGPIPE for us.
+  return 0;  // Indicates success.
+}
+
+#define send_flags MSG_NOSIGNAL
+
+#endif
+
+// End SIGPIPE section.
+/////
+
 // mac/linux version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
   struct pollfd *poll_fd = array__item_ptr(poll_fds, index);
@@ -310,6 +338,14 @@ static const char *make_non_blocking(int sock) {
   if (ret_val != 0) return "ioctlsocket";
   return NULL;  // Indicate success.
 }
+
+// windows version
+static int avoid_sigpipe(int sock) {
+  // Do nothing; windows doesn't throw SIGPIPE on a broken socket.
+  return 0;  // Indicates success.
+}
+
+#define send_flags 0
 
 // windows version
 static void set_conn_to_poll_mode(int index, PollMode poll_mode) {
@@ -587,8 +623,7 @@ static int send_all(int socket, msg_Data data) {
   data.num_bytes += header_len;
 
   while (data.num_bytes > 0) {
-    int default_send_options = 0;
-    long just_sent = send(socket, data.bytes, data.num_bytes, default_send_options);
+    long just_sent = send(socket, data.bytes, data.num_bytes, send_flags);
     if (just_sent == -1 && get_errno() == err_would_block) continue;
     if (just_sent == -1) return -1;
     data.bytes     += just_sent;
@@ -602,8 +637,6 @@ static int send_all(int socket, msg_Data data) {
 // returns the name of the failing system call on error,
 // and get_errno() returns the error code.
 static char *send_data(msg_Conn *conn, msg_Data data) {
-  int default_options = 0;
-
   if (conn->protocol_type == msg_tcp) {
     return send_all(conn->socket, data) ? "send" : no_error;
   }
@@ -613,12 +646,12 @@ static char *send_data(msg_Conn *conn, msg_Data data) {
     struct sockaddr_in sockaddr;
     set_sockaddr_for_conn(&sockaddr, conn);
     long bytes_sent = sendto(conn->socket,
-        data.bytes - header_len, data.num_bytes + header_len, default_options,
+        data.bytes - header_len, data.num_bytes + header_len, send_flags,
         (struct sockaddr *)&sockaddr, sock_in_size);
     if (bytes_sent == -1) return "sendto";
   } else {
     long bytes_sent = send(conn->socket,
-        data.bytes - header_len, data.num_bytes + header_len, default_options);
+        data.bytes - header_len, data.num_bytes + header_len, send_flags);
     if (bytes_sent == -1) return "send";
   }
   return no_error;
@@ -899,6 +932,10 @@ static void read_from_socket(int sock, msg_Conn *conn) {
         if (get_errno() == err_would_block) return;
 				return send_callback_os_error(conn, "accept", NULL);
 			}
+      
+      if (avoid_sigpipe(new_sock) != 0) {
+        return send_callback_os_error(conn, "setsockopt", NULL);
+      }
 
       msg_Conn *new_conn      = new_connection(conn->conn_context, conn->callback);
       new_conn->socket        = new_sock;
