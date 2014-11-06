@@ -70,6 +70,7 @@ int max_tries = 24;
 
 int server_done;
 int server_event_num;
+Context server_ctx;
 
 static void server_reply(char *req_str, char *reply_str, msg_Conn *conn) {
   test_printf("Server: got '%s', replying with '%s'.\n", req_str, reply_str);
@@ -85,22 +86,20 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     msg_listening, msg_connection_ready, msg_request,
     msg_message, msg_request, msg_connection_closed};
 
-  Context *ctx = (Context *)conn->conn_context;
-
   test_printf("Server: Received event %s\n", event_names[event]);
 
   if (event == msg_error) {
     char *err_str = msg_as_str(data);
     test_printf("Server: Error: %s\n", err_str);
     if (strcmp(err_str, "bind: Address already in use") == 0) {
-      if (ctx->num_tries < max_tries) {
-        test_printf("Will wait briefly and try again at address %s.\n", ctx->address);
+      if (server_ctx.num_tries < max_tries) {
+        test_printf("Will wait briefly and try again at address %s.\n", server_ctx.address);
         sleep(5);
-        ctx->num_tries++;
-        msg_listen(ctx->address, ctx, server_update);
+        server_ctx.num_tries++;
+        msg_listen(server_ctx.address, server_update);
         return;  // Don't count this as a server event.
       } else {
-        test_printf("Server: max_tries reached; giving up listening (at %s).\n", ctx->address);
+        test_printf("Server: max_tries reached; giving up listening (at %s).\n", server_ctx.address);
       }
     }
   }
@@ -133,8 +132,7 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
   if (event == msg_connection_closed) {
     test_printf("Server: Connection closed.\n");
-    free(ctx->address);
-    free(ctx);
+    free(server_ctx.address);
     server_done = true;
   }
 
@@ -150,13 +148,10 @@ int server(int protocol_type) {
       protocol_type == msg_udp ? "udp" : "tcp",
       protocol_type == msg_udp ? udp_port : tcp_port);
 
-  Context *ctx = malloc(sizeof(Context));
-  ctx->address   = strdup(address);
-  ctx->num_tries = 0;
+  server_ctx.address   = strdup(address);
+  server_ctx.num_tries = 0;
 
-  msg_listen(address,         // protocol
-             ctx,             // context
-             server_update);  // callback
+  msg_listen(address, server_update);
   int timeout_in_ms = 10;
 
   while (!server_done) msg_runloop(timeout_in_ms);
@@ -192,7 +187,7 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
         test_printf("Client: Will wait briefly and try again at address %s.\n", ctx->address);
         sleep(5);
         ctx->num_tries++;
-        msg_connect(ctx->address, ctx, client_update);
+        msg_connect(ctx->address, client_update, ctx);
         return;  // Don't count this as a server event.
       } else {
         test_printf("Client: max_tries reached; giving up connecting (at %s).\n", ctx->address);
@@ -263,7 +258,7 @@ int client(int protocol_type, pid_t server_pid) {
   ctx->address   = strdup(address);
   ctx->num_tries = 0;
 
-  msg_connect(address, ctx, client_update);
+  msg_connect(address, client_update, ctx);
   int timeout_in_ms = 10;
   while (!client_done) {
     msg_runloop(timeout_in_ms);

@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
   char address[128];
   snprintf(address, 128, "%s://*:%d", protocol, port);
   printf("Server: listening at address %s\n", address);
-  msg_listen(address, msg_no_context, update);
+  msg_listen(address, update);
 
   int timeout_in_ms = 10;
   while (!done) msg_runloop(timeout_in_ms);

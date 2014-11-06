@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
   char address[128];
   snprintf(address, 128, "%s://127.0.0.1:%d", protocol, port);
   printf("Client: connecting to address %s\n", address);
-  msg_connect(address, msg_no_context, update);
+  msg_connect(address, update, msg_no_context);
 
   int timeout_in_ms = 10;
   while (!done) msg_runloop(timeout_in_ms);

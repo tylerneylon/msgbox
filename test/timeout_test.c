@@ -1,8 +1,8 @@
-// udp_timeout_test.c
+// timeout_test.c
 //
 // Home repo: https://github.com/tylerneylon/msgbox
 //
-// UDP timeout tests for msgbox.
+// udp and tcp timeout tests for msgbox.
 // This started as a copy of msgbox_test.
 //
 
@@ -56,31 +56,20 @@ int server_done;
 int server_event_num;
 
 void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
-
-  Context *ctx = (Context *)conn->conn_context;
-
   if (event == msg_connection_closed) {
     test_printf("Server: Connection closed.\n");
-    free(ctx->address);
-    free(ctx);
     server_done = true;
   }
 }
 
-int server() {
+int server(const char *protocol) {
   server_done = false;
   server_event_num = 0;
 
   char address[256];
-  snprintf(address, 256, "udp://*:%d", udp_port);
+  snprintf(address, 256, "%s://*:%d", protocol, udp_port);
 
-  Context *ctx = malloc(sizeof(Context));
-  ctx->address   = strdup(address);
-  ctx->num_tries = 0;
-
-  msg_listen(address,         // protocol
-             ctx,             // context
-             server_update);  // callback
+  msg_listen(address, server_update);
   int timeout_in_ms = 10;
 
   while (!server_done) msg_runloop(timeout_in_ms);
@@ -109,7 +98,11 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   test_printf("Client: Received event %s\n", event_names[event]);
 
   if (event == msg_error) {
-    test_printf("Client: Error: %s\n", msg_as_str(data));
+    const char *err = msg_as_str(data);
+    test_printf("Client: Error: %s\n", err);
+    const char *expected_err = (conn->protocol_type == msg_tcp ?
+        "tcp get timed out" : "udp get timed out");
+    test_str_eq(err, expected_err);
     msg_disconnect(conn);
   }
 
@@ -132,7 +125,7 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
   client_event_num++;
 }
 
-int client(pid_t server_pid) {
+int client(const char *protocol, pid_t server_pid) {
   client_done = false;
   client_event_num = 0;
 
@@ -140,13 +133,13 @@ int client(pid_t server_pid) {
   usleep(1000);
 
   char address[256];
-  snprintf(address, 256, "udp://127.0.0.1:%d", udp_port);
+  snprintf(address, 256, "%s://127.0.0.1:%d", protocol, udp_port);
 
   Context *ctx = malloc(sizeof(Context));
   ctx->address   = strdup(address);
   ctx->num_tries = 0;
 
-  msg_connect(address, ctx, client_update);
+  msg_connect(address, client_update, ctx);
   int timeout_in_ms = 10;
   while (!client_done) {
     msg_runloop(timeout_in_ms);
@@ -161,9 +154,9 @@ int client(pid_t server_pid) {
   return test_success;
 }
 
-int udp_timeout_test() {
+int timeout_test(const char *protocol) {
 
-  test_printf("Test: Starting udp timeout test.\n");
+  test_printf("Test: Starting %s timeout test.\n", protocol);
 
   int status;
   pid_t child_pid = fork();
@@ -171,12 +164,12 @@ int udp_timeout_test() {
 
   if (child_pid == 0) {
     // Child process.
-    exit(server());
+    exit(server(protocol));
   } else {
     // Parent process.
     test_printf("Client pid=%d  server pid=%d\n", getpid(), child_pid);
     test_printf("Client: starting up.\n"); // tmp
-    int client_failed = client(child_pid);
+    int client_failed = client(protocol, child_pid);
     int server_status;
     wait(&server_status);
     int server_failed = WEXITSTATUS(server_status);
@@ -185,6 +178,14 @@ int udp_timeout_test() {
 
     return client_failed || server_failed;
   }
+}
+
+int udp_timeout_test() {
+  return timeout_test("udp");
+}
+
+int tcp_timeout_test() {
+  return timeout_test("tcp");
 }
 
 int main(int argc, char **argv) {
@@ -196,6 +197,6 @@ int main(int argc, char **argv) {
   udp_port = rand() % 1024 + 1024;
 
   start_all_tests(argv[0]);
-  run_tests(udp_timeout_test);
+  run_tests(udp_timeout_test, tcp_timeout_test);
   return end_all_tests();
 }

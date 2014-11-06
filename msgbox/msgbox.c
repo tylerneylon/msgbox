@@ -510,8 +510,9 @@ int reply_id_eq(void *reply_id1, void *reply_id2) {
 }
 
 typedef struct {
-  double last_seen_at;
-  Map reply_contexts;  // Map reply_id -> reply_context.
+  double   last_seen_at;
+  Map      reply_contexts;  // Map reply_id -> reply_context.
+  void *   conn_context;    // Useful for listening udp conns.
   uint16_t next_reply_id;
 
   // These overlap; waiting_buffer is a suffix of total_buffer.
@@ -1037,9 +1038,15 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
     if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
 
+    // Save the current conn_context if appropriate.
+    ConnStatus *old_status = status_of_conn(conn);
+    if (old_status) { old_status->conn_context = conn->conn_context; }
+
+    // Set up the conn with current remote address and conn context.
     conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
     conn->remote_port = ntohs(remote_sockaddr.sin_port);
     status = remote_address_seen(conn);
+    conn->conn_context = status->conn_context;
   }
 
   // Look up a reply_context if it's a reply.
@@ -1255,7 +1262,8 @@ void msg_runloop(int timeout_in_ms) {
     map__unset(timeout->status->reply_contexts, reply_id_key);
     array__remove_item(timeouts, timeout);
     i--;  // Back up one item so the next iteration gets the next item.
-    send_callback_error(conn, "udp get timed out", NULL);
+    const char *msg = (conn->protocol_type == msg_tcp ? "tcp get timed out" : "udp get timed out");
+    send_callback_error(conn, msg, NULL);  // NULL --> nothing to free
   }
 
   // Save the state of pending callbacks so that users can add new callbacks
@@ -1273,12 +1281,12 @@ void msg_runloop(int timeout_in_ms) {
   array__delete(saved_immediate_callbacks);
 }
 
-void msg_listen(const char *address, void *conn_context, msg_Callback callback) {
+void msg_listen(const char *address, msg_Callback callback) {
   int for_listening = true;
-  open_socket(address, conn_context, callback, for_listening);
+  open_socket(address, msg_no_context, callback, for_listening);
 }
 
-void msg_connect(const char *address, void *conn_context, msg_Callback callback) {
+void msg_connect(const char *address, msg_Callback callback, void *conn_context) {
   int for_listening = false;
   open_socket(address, conn_context, callback, for_listening);
 }

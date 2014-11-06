@@ -66,10 +66,10 @@ void msg_runloop(int timeout_in_ms);
 
 // Calls to start or stop a client or server.
 
-void msg_listen(const char *address, void *conn_context, msg_Callback callback);
-void msg_connect(const char *address, void *conn_context, msg_Callback callback);
+void msg_listen (const char *address, msg_Callback callback);
+void msg_connect(const char *address, msg_Callback callback, void *conn_context);
 
-void msg_unlisten(msg_Conn *conn);
+void msg_unlisten  (msg_Conn *conn);
 void msg_disconnect(msg_Conn *conn);
 
 // Calls to send a message. Call msg_get when you expect a reply; otherwise call msg_send.
