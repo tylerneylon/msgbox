@@ -28,7 +28,7 @@ includes = -Imsgbox -I.
 ifeq ($(shell uname -s), Darwin)
 	cflags = $(includes) -std=c99
 else
-	cflags = $(includes) -std=c99 -D _BSD_SOURCE -D _POSIX_C_SOURCE=200809
+	cflags = $(includes) -std=c99 -D _BSD_SOURCE -D _POSIX_C_SOURCE=200809 -D _GNU_SOURCE
 endif
 cc = gcc $(cflags)
 
