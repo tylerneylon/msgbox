@@ -33,7 +33,7 @@ void msg_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 }
 
 int main() {
-  msg_listen("udp://*:2100", msg_no_context, msg_update);
+  msg_listen("udp://*:2100", msg_update);
   while (1) msg_runloop(10 /* timeout in ms */);
   return 0;
 }
@@ -56,7 +56,7 @@ void msg_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 }
 
 int main() {
-  msg_connect("udp://127.0.0.1:2100", msg_no_context, msg_update);
+  msg_connect("udp://127.0.0.1:2100", msg_update, msg_no_context);
   while (1) msg_runloop(10 /* timeout in ms */);
   return 0;
 }
@@ -83,18 +83,13 @@ designed to be called repeatedly and often using the
 
 #### --- `msg_listen` ---
 
-`void msg_listen(const char *address, void *conn_context, msg_Callback callback)`
+`void msg_listen(const char *address, msg_Callback callback)`
 
 
 This initiates a server at the given address, which must have the
 syntax `(tcp|udp)://(ip|*):<port>`; an example is `"tcp://*:6070"`.
 A `*` in the ip position tells `msg_listen` to listen on any interface, corresponding
 to the system's `INADDR_ANY` value.
-
-The `conn_context` pointer is treated as an opaque value by `msgbox`, and offers
-you a way to know which listening address events occur on. This pointer will be
-handed to your callback as `conn->conn_context` for every event associated with
-this address.
 
 The `callback` is a pointer to a function with the following return and parameter
 types:
@@ -105,7 +100,7 @@ This callback receives all events associated with the address being listened to,
 and is always called from within `msg_runloop`, described below.
 
 A successful `msg_listen` call results in the `msg_listening` event being
-sent to your callback.
+sent to your callback; otherwise a `msg_error` event is sent.
 
 #### --- `msg_unlisten` ---
 
@@ -120,15 +115,17 @@ a successful `msg_listen` call.
 
 #### --- `msg_connect` ---
 
-`void msg_connect(const char *address, void *conn_context, msg_Callback callback)`
+`void msg_connect(const char *address, msg_Callback callback, void *conn_context)`
 
 This function is designed for client-side use. It initiates a connection with the listening
 port specified in `address`. An example address is `"udp://1.2.3.4:8574"`.
 
-The parameters are identical in meaning to those in `msg_listen`. The main differences are that:
+The `conn_context` pointer is treated as an opaque value by `msgbox`, and offers
+you a way to pass in connection-specific data to your callback. This pointer will be
+handed to your callback as `conn->conn_context` for every event associated with
+this remote address.
 
-* The server is expected to be listening before the client tries to connect; and
-* the client never receives a `msg_listening` event.
+The server is expected to be listening before the client tries to connect.
 
 The first event upon a successful `msg_connect` call is `msg_connection_ready`.
 
@@ -148,15 +145,17 @@ is expected to be the one sent to any event associated with
 the connection being closed; `msg_connection_ready` is a good opportunity
 to track this object.
 
-Closing a connection on a server - include a udp server - does not
+Closing a connection on a server - including a udp server - does not
 stop the server from listening on that address.
 
 The `msg_connection_closed` event occurs on both client and server after
-a successful disconnect.
+a successful disconnect. The `msg_connection_lost` event also indicates the
+closure of a connection, the difference being that something unexpected caused the
+connection to close, such as a lost internet connection.
 
 ### Sending messages
 
-The `msg_send` and `msg_get` are similar enough that they're described together.
+The `msg_send` and `msg_get` functions are similar enough that they're described together.
 
 #### --- `msg_send` & `msg_get` ---
 
