@@ -1036,7 +1036,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
         data.num_bytes + header_len, default_options,
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
-    if (bytes_recvd == -1) return send_callback_os_error(conn, "recvfrom", NULL);
+    if (bytes_recvd == -1) { return send_callback_os_error(conn, "recvfrom", NULL); }
 
     // Save the current conn_context if appropriate.
     ConnStatus *old_status = status_of_conn(conn);
