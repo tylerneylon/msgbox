@@ -942,6 +942,12 @@ static int read_from_socket(int sock, msg_Conn *conn) {
         return false;
       }
 
+      const char *failing_fn = make_non_blocking(new_sock);
+      if (failing_fn) {
+        send_callback_os_error(conn, failing_fn, NULL);
+        return false;
+      }
+
       msg_Conn *new_conn      = new_connection(conn->conn_context, conn->callback);
       new_conn->socket        = new_sock;
       new_conn->remote_ip     = remote_addr.sin_addr.s_addr;
@@ -996,7 +1002,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
     if (!read_header(sock, conn, header)) return false;
   }
 
-  if (false) {  // Debug code.
+  if (verbosity >= 2) {  // Debug code.
     char *msg_type_str[] = {
       "msg_type_one_way",
       "msg_type_request",
