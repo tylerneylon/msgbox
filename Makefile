@@ -14,7 +14,7 @@
 # Variables for targets.
 
 # Target lists.
-tests            = out/msgbox_test out/timeout_test out/multiget_test
+tests            = out/msgbox_test out/timeout_test out/multiget_test out/multi_msg_per_loop_test
 cstructs_obj     = array.o map.o list.o memprofile.o
 cstructs_rel_obj = $(addprefix out/,       $(cstructs_obj))
 cstructs_dbg_obj = $(addprefix out/debug_, $(cstructs_obj))
