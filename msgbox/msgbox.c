@@ -911,8 +911,10 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
   return buffer->num_bytes == 0;
 }
 
+// Returns true iff the caller may immediately call this again with the same
+// parameters to check for additional messages waiting in the socket.
 // TODO Make this function shorter or break it up.
-static void read_from_socket(int sock, msg_Conn *conn) {
+static int read_from_socket(int sock, msg_Conn *conn) {
   if (verbosity >= 1) {
     fprintf(stderr, "%s(%d, %s)\n", __FUNCTION__, sock, address_as_str(address_of_conn(conn)));
   }
@@ -930,12 +932,14 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       socklen_t addr_len = sizeof(remote_addr);
       int new_sock = accept(conn->socket, (struct sockaddr *)&remote_addr, &addr_len);
       if (new_sock == -1) {
-        if (get_errno() == err_would_block) return;
-				return send_callback_os_error(conn, "accept", NULL);
+        if (get_errno() == err_would_block) return false;
+				send_callback_os_error(conn, "accept", NULL);
+        return false;
 			}
       
       if (avoid_sigpipe(new_sock) != 0) {
-        return send_callback_os_error(conn, "setsockopt", NULL);
+        send_callback_os_error(conn, "setsockopt", NULL);
+        return false;
       }
 
       msg_Conn *new_conn      = new_connection(conn->conn_context, conn->callback);
@@ -949,7 +953,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       add_to_poll_fds(new_sock, poll_mode_read);
 
       remote_address_seen(new_conn);  // Sets up a ConnStatus and sends msg_connection_ready.
-      return;
+      return false;
     }
 
     status = remote_address_seen(conn);
@@ -957,9 +961,10 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
       // Begin a new recv.
       header = alloca(sizeof(Header));
-      if (!read_header(sock, conn, header)) return;
+      if (!read_header(sock, conn, header)) return false;
       if (header->message_type == msg_type_close) {
-        return local_disconnect(conn, msg_connection_closed);
+        local_disconnect(conn, msg_connection_closed);
+        return false;
       }
       new_conn_status_buffer(status, header);
     } else {
@@ -968,12 +973,13 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       header = (Header *)(status->total_buffer.bytes - header_len);
     }
     int ret_val = continue_recv(conn, status);
-    if (ret_val == -2) return;  // The message was interrupted by a close.
+    if (ret_val == -2) return false;  // The message was interrupted by a close.
     if (ret_val == -1) {
       send_callback_os_error(conn, "recv", NULL);
-      return delete_conn_status_buffer(status);
+      delete_conn_status_buffer(status);
+      return false;
     }
-    if (ret_val == false) return;  // It will finish later.
+    if (ret_val == false) return false;  // It will finish later.
     data = status->total_buffer;
 
     if (0) {
@@ -987,7 +993,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
 
     // New udp message: read the header.
     header = alloca(sizeof(Header));
-    if (!read_header(sock, conn, header)) return;
+    if (!read_header(sock, conn, header)) return false;
   }
 
   if (false) {  // Debug code.
@@ -1023,7 +1029,8 @@ static void read_from_socket(int sock, msg_Conn *conn) {
       break;
     case msg_type_close:
       if (conn->protocol_type == msg_tcp) msg_delete_data(data);
-      return local_disconnect(conn, msg_connection_closed);
+      local_disconnect(conn, msg_connection_closed);
+      return false;
   }
 
   // Read in any udp data.
@@ -1036,7 +1043,10 @@ static void read_from_socket(int sock, msg_Conn *conn) {
         data.num_bytes + header_len, default_options,
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
-    if (bytes_recvd == -1) { return send_callback_os_error(conn, "recvfrom", NULL); }
+    if (bytes_recvd == -1) {
+      send_callback_os_error(conn, "recvfrom", NULL);
+      return false;
+    }
 
     // Save the current conn_context if appropriate.
     ConnStatus *old_status = status_of_conn(conn);
@@ -1054,7 +1064,8 @@ static void read_from_socket(int sock, msg_Conn *conn) {
     void *reply_id_key = (void *)(intptr_t)header->reply_id;
     map__key_value *pair = map__find(status->reply_contexts, reply_id_key);
     if (pair == NULL) {
-      return send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
+      send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
+      return false;
     }
     remove_timeout(status, header->reply_id);
     conn->reply_context = pair->value;
@@ -1066,6 +1077,7 @@ static void read_from_socket(int sock, msg_Conn *conn) {
   }
 
   send_callback(conn, event, data, NULL);
+  return true;
 }
 
 // Sets up sockaddr based on address. If an error occurs, the error callback
@@ -1240,7 +1252,7 @@ void msg_runloop(int timeout_in_ms) {
       }
       if (poll_mode & poll_mode_read) {
         // TODO Why are the two params to read_from_socket separate, since conn->socket should always = the given fd?
-        read_from_socket(conn->socket, conn);
+        while ((read_from_socket(conn->socket, conn)));
       }
     }
     array__for(int *, index, removals, i) remove_conn_at(*index);

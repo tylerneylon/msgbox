@@ -113,12 +113,6 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     num_msg_recd++;
   }
 
-  if (event == msg_connection_closed) {
-    test_printf("Server: Connection closed.\n");
-    free(server_ctx.address);
-    server_done = true;
-  }
-
   server_event_num++;
 }
 
@@ -144,6 +138,8 @@ int server(int protocol_type) {
   while (!server_done) msg_runloop(timeout_in_ms);
 
   test_that(num_msg_recd == 3);
+
+  free(server_ctx.address);
 
   // Sleep for 1ms as the client expects to finish before the server.
   // (Early server termination could be an error, so we check for it.)
@@ -195,12 +191,6 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     msg_send(conn, data);
     msg_send(conn, data);
     msg_delete_data(data);
-  }
-
-  if (event == msg_connection_closed) {
-    test_printf("Client: Connection closed.\n");
-    free(ctx->address);
-    free(ctx);
     client_done = true;
   }
 
@@ -234,6 +224,9 @@ int client(int protocol_type, pid_t server_pid) {
       test_failed("Client: Server process ended before client expected.");
     }
   }
+
+  free(ctx->address);
+  free(ctx);
 
   return test_success;
 }
