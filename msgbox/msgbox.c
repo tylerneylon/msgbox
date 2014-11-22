@@ -8,6 +8,7 @@
 // Universal (windows/mac/linux) headers.
 
 #include "../cstructs/cstructs.h"
+#include "dbgcheck.h"
 
 #include <stdio.h>
 
@@ -38,20 +39,10 @@ static int net_allocs[] = {0};  // Indexed by class.
 
 #ifdef DEBUG
 
+// TODO Remove this section as its functionality is being replaced by dbgcheck.
+
 #include "../cstructs/memprofile.h"
 #include <assert.h>
-
-// Functions to assist in detecting memory leaks for tests.
-
-static void *alloc_class(size_t bytes, int class) {
-  ++net_allocs[class];
-  return malloc(bytes);
-}
-
-static void free_class(void *ptr, int class) {
-  --net_allocs[class];
-  free(ptr);
-}
 
 #else // non-DEBUG mode
 
@@ -441,7 +432,11 @@ typedef struct {
   msg_Event event;
   msg_Data data;
   void *to_free;
+  const char *set_name;
 } PendingCall;
+
+#define free_nothing NULL
+#define no_set_name NULL
 
 static Array immediate_callbacks = NULL;
 
@@ -521,7 +516,7 @@ typedef struct {
 } ConnStatus;
 
 ConnStatus *new_conn_status(double now) {
-  ConnStatus *status = calloc(1, sizeof(ConnStatus));
+  ConnStatus *status = dbgcheck__calloc(sizeof(ConnStatus), "ConnStatus");
   status->last_seen_at = now;
   status->reply_contexts = map__new(reply_id_hash, reply_id_eq);
   status->next_reply_id = 1;
@@ -543,6 +538,8 @@ static void delete_conn_status(void *status_v_ptr) {
   // This should be empty since we need to give the user a chance to free all contexts.
   assert(status->reply_contexts->count == 0);
   map__delete(status->reply_contexts);
+  // TODO Should we delete the ConnStatus itself here?
+  // If yes, do it. Otherwise leave a comment explaining why not.
 }
 
 // This maps Address -> ConnStatus.
@@ -673,11 +670,15 @@ static void array__remove_and_fill(Array array, int index) {
 }
 
 static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
-  msg_Conn *conn = malloc(sizeof(msg_Conn));
+  msg_Conn *conn = dbgcheck__malloc(sizeof(msg_Conn), "msg_Conn");
   memset(conn, 0, sizeof(msg_Conn));
   conn->conn_context = conn_context;
   conn->callback = callback;
   return conn;
+}
+
+static void address_releaser(void *address_vp) {
+  dbgcheck__free(address_vp, "Address");
 }
 
 static void init_if_needed() {
@@ -693,25 +694,30 @@ static void init_if_needed() {
   init_poll_fds();
 
   conn_status = map__new(address_hash, address_eq);
-  conn_status->key_releaser = free;
+  conn_status->key_releaser = address_releaser;
   conn_status->value_releaser = delete_conn_status;
 
   init_done = true;
 }
 
-static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data, void *to_free) {
-  PendingCall pending_callback = { .conn = conn, .event = event, .data = { data.num_bytes, data.bytes }, .to_free = to_free };
+static void send_callback(msg_Conn *conn, msg_Event event, msg_Data data, void *to_free, const char *set_name) {
+  PendingCall pending_callback = {
+    .conn = conn,
+    .event = event,
+    .data = { data.num_bytes, data.bytes },
+    .to_free = to_free,
+    .set_name = set_name };
   array__add_item_val(immediate_callbacks, pending_callback);
 }
 
-static void send_callback_error(msg_Conn *conn, const char *msg, void *to_free) {
-  send_callback(conn, msg_error, msg_new_data(msg), to_free);
+static void send_callback_error(msg_Conn *conn, const char *msg, void *to_free, const char *set_name) {
+  send_callback(conn, msg_error, msg_new_data(msg), to_free, set_name);
 }
 
-static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_free) {
+static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_free, const char *set_name) {
   static char err_msg[1024];
   snprintf(err_msg, 1024, "%s: %s", msg, err_str());
-  send_callback_error(conn, err_msg, to_free);
+  send_callback_error(conn, err_msg, to_free, set_name);
 }
 
 // Returns no_error (NULL) on success, and sets the protocol_type,
@@ -817,7 +823,8 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
   int is_listening_udp = (conn->for_listening && conn->protocol_type == msg_udp);
 
   void *to_free = is_listening_udp ? NULL : conn;
-  send_callback(conn, event, msg_no_data, to_free);
+  const char *set_name = is_listening_udp ? NULL : "msg_Conn";
+  send_callback(conn, event, msg_no_data, to_free, set_name);
 
   if (is_listening_udp) return;
 
@@ -825,12 +832,24 @@ static void local_disconnect(msg_Conn *conn, msg_Event event) {
   array__add_item_val(removals, conn->index);
 }
 
-// Reads the header of a udp packet.
+// Reads the header of a message.
+// For udp packets, the next recv will still include the header.
+// For tcp packets, the next recv will be just after the header.
 // Returns true on success; false on failure.
 static int read_header(int sock, msg_Conn *conn, Header *header) {
-  int options = conn->protocol_type == msg_udp ? MSG_PEEK : 0;
   // A (char *) header pointer works for all versions of recv, which take either char * or void *.
-  long bytes_recvd = recv(sock, (char *)header, header_len, options);
+  long bytes_recvd = recv(sock, (char *)header, header_len, MSG_PEEK);
+
+  // In some cases, a tcp message header may be cut off, so we want to asynchronously wait.
+  // Poor header.
+  if (bytes_recvd > 0 && bytes_recvd < header_len) return false;
+
+  // Mark the header as read in the tcp case.
+  if (conn->protocol_type == msg_tcp) {
+    int default_options = 0;
+    recv(sock, (char *)header, header_len, default_options);
+  }
+
   if (bytes_recvd == 0 || (bytes_recvd == -1 && get_errno() == err_conn_reset)) {
     local_disconnect(conn, msg_connection_lost);
     return false;
@@ -838,7 +857,7 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   // We ignore err_win_msg_size; it only tells us that we didn't get the full udp message.
   if (bytes_recvd == -1 && get_errno() != err_win_msg_size) {
     if (get_errno() == err_would_block) return false;
-    send_callback_os_error(conn, "recv", NULL);
+    send_callback_os_error(conn, "recv", free_nothing, no_set_name);
     return false;
   }
 
@@ -881,11 +900,11 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
   } else {
     // It's a new remote address; conn_status takes ownership of address.
     status = new_conn_status(0.0 /* TODO set to now */);
-    address = malloc(sizeof(Address));
+    address = dbgcheck__malloc(sizeof(Address), "Address");
     *address = *address_of_conn(conn);
 
     map__set(conn_status, address, status);
-    send_callback(conn, msg_connection_ready, msg_no_data, NULL);
+    send_callback(conn, msg_connection_ready, msg_no_data, free_nothing, no_set_name);
   }
 
   return status;
@@ -904,7 +923,10 @@ static int continue_recv(msg_Conn *conn, ConnStatus *status) {
     local_disconnect(conn, msg_connection_lost);
     return -2;
   }
-  if (bytes_in == -1) return -1;
+  if (bytes_in == -1) {
+    if (get_errno() == err_would_block) return false;  // More data is pending.
+    return -1;  // This is an error we must report; treat the current data as lost.
+  } 
 
   buffer->bytes     += bytes_in;
   buffer->num_bytes -= bytes_in;
@@ -933,18 +955,18 @@ static int read_from_socket(int sock, msg_Conn *conn) {
       int new_sock = accept(conn->socket, (struct sockaddr *)&remote_addr, &addr_len);
       if (new_sock == -1) {
         if (get_errno() == err_would_block) return false;
-				send_callback_os_error(conn, "accept", NULL);
+        send_callback_os_error(conn, "accept", free_nothing, no_set_name);
         return false;
 			}
       
       if (avoid_sigpipe(new_sock) != 0) {
-        send_callback_os_error(conn, "setsockopt", NULL);
+        send_callback_os_error(conn, "setsockopt", free_nothing, no_set_name);
         return false;
       }
 
       const char *failing_fn = make_non_blocking(new_sock);
       if (failing_fn) {
-        send_callback_os_error(conn, failing_fn, NULL);
+        send_callback_os_error(conn, failing_fn, free_nothing, no_set_name);
         return false;
       }
 
@@ -981,7 +1003,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
     int ret_val = continue_recv(conn, status);
     if (ret_val == -2) return false;  // The message was interrupted by a close.
     if (ret_val == -1) {
-      send_callback_os_error(conn, "recv", NULL);
+      send_callback_os_error(conn, "recv", free_nothing, no_set_name);
       delete_conn_status_buffer(status);
       return false;
     }
@@ -1050,7 +1072,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
         (struct sockaddr *)&remote_sockaddr, &remote_sockaddr_size);
 
     if (bytes_recvd == -1) {
-      send_callback_os_error(conn, "recvfrom", NULL);
+      send_callback_os_error(conn, "recvfrom", free_nothing, no_set_name);
       return false;
     }
 
@@ -1070,7 +1092,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
     void *reply_id_key = (void *)(intptr_t)header->reply_id;
     map__key_value *pair = map__find(status->reply_contexts, reply_id_key);
     if (pair == NULL) {
-      send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len);
+      send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len, "msg_Data bytes");
       return false;
     }
     remove_timeout(status, header->reply_id);
@@ -1082,7 +1104,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
     conn->reply_context = NULL;
   }
 
-  send_callback(conn, event, data, NULL);
+  send_callback(conn, event, data, free_nothing, no_set_name);
   return true;
 }
 
@@ -1092,14 +1114,14 @@ static int read_from_socket(int sock, msg_Conn *conn) {
 static int setup_sockaddr(struct sockaddr_in *sockaddr, const char *address, msg_Conn *conn) {
   const char *err_msg = parse_address_str(address, conn);
   if (err_msg) {
-    send_callback_error(conn, err_msg, conn);
+    send_callback_error(conn, err_msg, conn, "msg_Conn");
     return false;
   }
 
   int use_default_protocol = 0;
   int sock = socket(AF_INET, conn->protocol_type, use_default_protocol);
   if (sock == -1) {
-    send_callback_os_error(conn, "socket", conn);
+    send_callback_os_error(conn, "socket", conn, "msg_Conn");
     return false;
   }
 
@@ -1133,7 +1155,7 @@ static void open_socket(const char *address, void *conn_context,
   // Make the socket non-blocking so a connect call won't block.
   const char *failing_fn = make_non_blocking(conn->socket);
   if (failing_fn) {
-    send_callback_os_error(conn, failing_fn, conn);
+    send_callback_os_error(conn, failing_fn, conn, "msg_Conn");
     return remove_last_polling_conn();
   }
 
@@ -1154,7 +1176,7 @@ static void open_socket(const char *address, void *conn_context,
       set_conn_to_poll_mode(conns->count - 1, poll_mode_write);
       return;
     }
-    send_callback_os_error(conn, sys_call_name, conn);
+    send_callback_os_error(conn, sys_call_name, conn, "msg_Conn");
     return remove_last_polling_conn();
   }
 
@@ -1162,11 +1184,11 @@ static void open_socket(const char *address, void *conn_context,
     if (conn->protocol_type == msg_tcp) {
       ret_val = listen(conn->socket, SOMAXCONN);
       if (ret_val == -1) {
-        send_callback_os_error(conn, "listen", conn);
+        send_callback_os_error(conn, "listen", conn, "msg_Conn");
         return remove_last_polling_conn();
       }
     }
-    send_callback(conn, msg_listening, msg_no_data, NULL);
+    send_callback(conn, msg_listening, msg_no_data, free_nothing, no_set_name);
   } else {
     remote_address_seen(conn);  // Sends the msg_connection_ready event.
   }
@@ -1243,7 +1265,7 @@ void msg_runloop(int timeout_in_ms) {
         if (error == err_conn_refused || error == err_timed_out) {
           array__add_item_val(removals, conn->index);
           set_errno(error);
-          send_callback_os_error(conn, "connect", conn);
+          send_callback_os_error(conn, "connect", conn, "msg_Conn");
           continue;
         }
         // When the error is neither err_conn_refused nor err_timed_out, then we let the
@@ -1281,7 +1303,7 @@ void msg_runloop(int timeout_in_ms) {
     array__remove_item(timeouts, timeout);
     i--;  // Back up one item so the next iteration gets the next item.
     const char *msg = (conn->protocol_type == msg_tcp ? "tcp get timed out" : "udp get timed out");
-    send_callback_error(conn, msg, NULL);  // NULL --> nothing to free
+    send_callback_error(conn, msg, free_nothing, no_set_name);
   }
 
   // Save the state of pending callbacks so that users can add new callbacks
@@ -1292,7 +1314,8 @@ void msg_runloop(int timeout_in_ms) {
   array__for(PendingCall *, call, saved_immediate_callbacks, i) {
     call->conn->callback(call->conn, call->event, call->data);
     if (call->data.bytes) msg_delete_data(call->data);
-    if (call->to_free) free(call->to_free);
+
+    if (call->to_free) dbgcheck__free(call->to_free, call->set_name);
   }
 
   // TODO Handle timed callbacks - such as heartbeats - and get timeouts.
@@ -1315,13 +1338,13 @@ void msg_unlisten(msg_Conn *conn) {
     return;
   }
   if (!conn->for_listening) {
-    return send_callback_error(conn, "msg_unlisten called on non-listening connection", NULL);
+    return send_callback_error(conn, "msg_unlisten called on non-listening connection", free_nothing, no_set_name);
   }
   conn->for_listening = false;  // Tell local_disconnect to free the conn object, even on udp.
   if (closesocket(conn->socket) == -1) {
     int saved_errno = get_errno();
     // TODO Make the fn name here more accurate (it's close on mac/linux and closesocket on windows).
-    send_callback_os_error(conn, "close", NULL);
+    send_callback_os_error(conn, "close", free_nothing, no_set_name);
     if (saved_errno == err_bad_sock) return;  // Don't send msg_listening_ended since it didn't.
   }
   local_disconnect(conn, msg_listening_ended);
@@ -1333,7 +1356,7 @@ void msg_disconnect(msg_Conn *conn) {
   set_header(data, msg_type_close, reply_id, num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
-  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
+  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, free_nothing, no_set_name);
   msg_delete_data(data);
 
   local_disconnect(conn, msg_connection_closed);
@@ -1345,7 +1368,7 @@ void msg_send(msg_Conn *conn, msg_Data data) {
   set_header(data, msg_type, conn->reply_id, (uint32_t)data.num_bytes);
 
   char *failed_sys_call = send_data(conn, data);
-  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, NULL);
+  if (failed_sys_call) send_callback_os_error(conn, failed_sys_call, free_nothing, no_set_name);
 }
 
 void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
@@ -1354,7 +1377,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
   if (status == NULL) {
     static char err_msg[1024];
     snprintf(err_msg, 1024, "No known connection with %s", address_as_str(address_of_conn(conn)));
-    return send_callback_error(conn, err_msg, NULL);
+    return send_callback_error(conn, err_msg, free_nothing, no_set_name);
   }
   uint16_t reply_id = status->next_reply_id++;
   map__set(status->reply_contexts, (void *)(intptr_t)reply_id, reply_context);
@@ -1364,7 +1387,7 @@ void msg_get(msg_Conn *conn, msg_Data data, void *reply_context) {
 
   char *failed_sys_call = send_data(conn, data);
   if (failed_sys_call) {
-    send_callback_os_error(conn, failed_sys_call, NULL);
+    send_callback_os_error(conn, failed_sys_call, free_nothing, no_set_name);
   } else {
     add_timeout(conn, status, reply_id);
   }
@@ -1378,18 +1401,19 @@ msg_Data msg_new_data(const char *str) {
   // Allocate room for the string with +1 for the null terminator.
   size_t data_size = strlen(str) + 1;
   msg_Data data = msg_new_data_space(data_size);
+  dbgcheck__inner_ptr_size(data.bytes, data.bytes - header_len, "msg_Data bytes", data_size);
   strncpy(data.bytes, str, data_size);
   return data;
 }
 
 msg_Data msg_new_data_space(size_t num_bytes) {
-  msg_Data data = {.num_bytes = num_bytes, .bytes = alloc_class(num_bytes + header_len, 0)};
+  msg_Data data = {.num_bytes = num_bytes, .bytes = dbgcheck__malloc(num_bytes + header_len, "msg_Data bytes")};
   data.bytes += header_len;
   return data;
 }
 
 void msg_delete_data(msg_Data data) {
-  free_class(data.bytes - header_len, 0);
+  dbgcheck__free(data.bytes - header_len, "msg_Data bytes");
 }
 
 char *msg_ip_str(msg_Conn *conn) {
