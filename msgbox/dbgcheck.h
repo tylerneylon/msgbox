@@ -11,6 +11,9 @@
 #pragma once
 
 #define dbgcheck__same_thread()
+#define dbgcheck__start_sync_block(name)
+#define dbgcheck__end_sync_block(name)
+#define dbgcheck__in_sync_block(name)
 #define dbgcheck__malloc(size, set_name) malloc(size)
 #define dbgcheck__calloc(size, set_name) calloc(1, size)
 #define dbgcheck__free(ptr, set_name) free(ptr)
