@@ -7,6 +7,12 @@
 
 // Universal (windows/mac/linux) headers.
 
+// Windows has weird dependency issues with the order of includes between
+// windows.h and winsock.h. Defining this macro allows us to include
+// windows.h first. See here:
+// http://stackoverflow.com/a/1372836
+#define _WINSOCKAPI_
+
 #include "../cstructs/cstructs.h"
 #include "dbgcheck.h"
 
