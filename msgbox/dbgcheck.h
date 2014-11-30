@@ -14,6 +14,10 @@
 #define dbgcheck__start_sync_block(name)
 #define dbgcheck__end_sync_block(name)
 #define dbgcheck__in_sync_block(name)
+
+#define dbgcheck__lock(m) pthread_mutex_lock(m)
+#define dbgcheck__unlock(m) pthread_mutex_unlock(m)
+
 #define dbgcheck__malloc(size, set_name) malloc(size)
 #define dbgcheck__calloc(size, set_name) calloc(1, size)
 #define dbgcheck__free(ptr, set_name) free(ptr)
