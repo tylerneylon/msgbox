@@ -75,7 +75,7 @@ void msg_disconnect(msg_Conn *conn);
 // Calls to send a message. Call msg_get when you expect a reply; otherwise call msg_send.
 
 void msg_send(msg_Conn *conn, msg_Data data);
-void msg_get(msg_Conn *conn, msg_Data data, void *reply_context);
+void msg_get (msg_Conn *conn, msg_Data data, void *reply_context);
 
 // Functions for working with msg_Data.
 

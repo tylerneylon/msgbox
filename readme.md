@@ -94,7 +94,7 @@ to the system's `INADDR_ANY` value.
 The `callback` is a pointer to a function with the following return and parameter
 types:
 
-    void my_callback(struct msg_Conn *, msg_Event, msg_Data);
+    void my_callback(msg_Conn *, msg_Event, msg_Data);
 
 This callback receives all events associated with the address being listened to,
 and is always called from within `msg_runloop`, described below.
@@ -204,7 +204,12 @@ incoming replies appropriately within their callback.
 ### Receiving messages
 
 All messages are passed to the callback function registered with
-`msg_listen` or `msg_connect`.
+`msg_listen` or `msg_connect`. Your callback receives a parameter `data` of type
+`msg_Data` which contains `data.num_bytes` bytes of data at the location `data.bytes`,
+which has type `char *`. You are free to treat this as a null-terminated string, which
+is often useful. `msgbox` owns this data and frees it immediately after your callback
+returns. If you'd like to save the data for later use, you must copy it within your
+callback.
 
 There are three message-receiving events that may be passed in to your
 callback's `event` parameter:
