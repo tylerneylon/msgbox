@@ -539,7 +539,7 @@ static void delete_conn_status_buffer(ConnStatus *status) {
   status->total_buffer = status->waiting_buffer = (msg_Data) { .num_bytes = 0, .bytes = NULL };
 }
 
-static void delete_conn_status(void *status_v_ptr) {
+static void delete_conn_status(void *status_v_ptr, void *context) {
   ConnStatus *status = (ConnStatus *)status_v_ptr;
   // This should be empty since we need to give the user a chance to free all contexts.
   assert(status->reply_contexts->count == 0);
@@ -670,7 +670,7 @@ static void array__remove_last(Array array) {
 static void array__remove_and_fill(Array array, int index) {
   void *elt = array__item_ptr(array, index);
   void *last_elt = array__item_ptr(array, array->count - 1);
-  if (array->releaser) array->releaser(elt);
+  if (array->releaser) array->releaser(elt, NULL);
   if (elt != last_elt) memcpy(elt, last_elt, array->item_size);
   array->count--;
 }
@@ -683,7 +683,7 @@ static msg_Conn *new_connection(void *conn_context, msg_Callback callback) {
   return conn;
 }
 
-static void address_releaser(void *address_vp) {
+static void address_releaser(void *address_vp, void *context) {
   dbgcheck__free(address_vp, "Address");
 }
 
@@ -700,7 +700,7 @@ static void init_if_needed() {
   init_poll_fds();
 
   conn_status = map__new(address_hash, address_eq);
-  conn_status->key_releaser = address_releaser;
+  conn_status->key_releaser   = address_releaser;
   conn_status->value_releaser = delete_conn_status;
 
   init_done = true;
