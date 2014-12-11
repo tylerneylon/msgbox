@@ -850,12 +850,6 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   // Poor header.
   if (bytes_recvd > 0 && bytes_recvd < header_len) return false;
 
-  // Mark the header as read in the tcp case.
-  if (conn->protocol_type == msg_tcp) {
-    int default_options = 0;
-    recv(sock, (char *)header, header_len, default_options);
-  }
-
   if (bytes_recvd == 0 || (bytes_recvd == -1 && get_errno() == err_conn_reset)) {
     local_disconnect(conn, msg_connection_lost);
     return false;
@@ -865,6 +859,12 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     if (get_errno() == err_would_block) return false;
     send_callback_os_error(conn, "recv", free_nothing, no_set_name);
     return false;
+  }
+
+  // Mark the header as read in the tcp case.
+  if (conn->protocol_type == msg_tcp) {
+    int default_options = 0;
+    recv(sock, (char *)header, header_len, default_options);
   }
 
   // Convert each field from network to host byte ordering.
