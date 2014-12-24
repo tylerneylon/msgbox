@@ -77,6 +77,7 @@ static int net_allocs[] = {0};  // Indexed by class.
 #include <sys/types.h>
 #include <unistd.h>
 
+// EWOULDBLOCK is the same as EAGAIN on mac.
 #define err_would_block   EWOULDBLOCK
 #define err_in_progress   EINPROGRESS
 #define err_fault         EFAULT
@@ -854,13 +855,14 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
     local_disconnect(conn, msg_connection_lost);
     return false;
   }
+  
   // We ignore err_win_msg_size; it only tells us that we didn't get the full udp message.
   if (bytes_recvd == -1 && get_errno() != err_win_msg_size) {
     if (get_errno() == err_would_block) return false;
     send_callback_os_error(conn, "recv", free_nothing, no_set_name);
     return false;
   }
-
+  
   // Mark the header as read in the tcp case.
   if (conn->protocol_type == msg_tcp) {
     int default_options = 0;
