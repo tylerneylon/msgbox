@@ -87,6 +87,7 @@ void msg_delete_data(msg_Data data);
 // Functions for working with msg_Conn.
 
 char *msg_ip_str(msg_Conn *conn);
+char *msg_address_str(msg_Conn *conn);
 
 // Functions for working with errors.
 

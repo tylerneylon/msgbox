@@ -1428,6 +1428,10 @@ char *msg_ip_str(msg_Conn *conn) {
   return inet_ntoa((struct in_addr) { .s_addr = conn->remote_ip});
 }
 
+char *msg_address_str(msg_Conn *conn) {
+  return address_as_str(address_of_conn(conn));
+}
+
 char *msg_error_str(msg_Data data) {
   return msg_as_str(data);
 }
