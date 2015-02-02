@@ -257,6 +257,9 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     snprintf(address_str, 256, "%s://%s:%d",
              conn->protocol_type == msg_tcp ? "tcp" : "udp",
              msg_ip_str(conn), conn->remote_port);
+    char *conn_context = (char *)conn->conn_context;
+
+    test_that(conn_context != NULL);
     test_str_eq(address_str, (char *)conn->conn_context);
   }
 

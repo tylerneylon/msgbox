@@ -38,7 +38,7 @@ typedef enum {
 static int verbosity = 0;
 
 // This can be used in cases of emergency debugging.
-#define prline printf("%s:%d(%s)\n", __FILE__, __LINE__, __FUNCTION__)
+#define prline printf("<pid %d> %s:%d(%s)\n", getpid(), __FILE__, __LINE__, __FUNCTION__)
 
 // This array is only used when DEBUG is defined.
 static int net_allocs[] = {0};  // Indexed by class.
@@ -462,17 +462,28 @@ typedef struct {
   uint32_t num_bytes;
 } Header;
 
-#define header_len 8
-
-
-///////////////////////////////////////////////////////////////////////////////
-//  Connection status map.
+#define header_len (sizeof(Header))
 
 typedef struct {
   uint32_t ip;    // Stored in network byte-order.
   uint16_t port;  // Stored in host    byte-order.
   uint16_t protocol_type;
 } Address;
+
+// Metadata is the preamble for a msg_Data buffer.
+// The non-header fields are used by listening udp sockets,
+// for which we must hold state across many remotes.
+typedef struct {
+  void *  reply_context;
+  Address remote_address;
+  Header  header;
+} Metadata;
+
+#define metadata_len (sizeof(Metadata))
+
+
+///////////////////////////////////////////////////////////////////////////////
+//  Connection status map.
 
 Address *address_of_conn(msg_Conn *conn) {
   return (Address *)(&conn->remote_ip);
@@ -727,6 +738,34 @@ static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_fre
   send_callback_error(conn, err_msg, to_free, set_name);
 }
 
+static void make_call(PendingCall *call) {
+  msg_Conn *conn = call->conn;
+
+  // Copy metadata from msg_Data/status to msg_Conn for udp messages.
+  if (conn->protocol_type == msg_udp && call->data.num_bytes > 0) {
+    msg_Data data          = call->data;
+    Metadata *metadata     = (Metadata *)(data.bytes - metadata_len);
+    conn->reply_context    = metadata->reply_context;
+    *address_of_conn(conn) = metadata->remote_address;
+    ConnStatus *status     = status_of_conn(conn);
+
+    // Unless this is a msg_error, we expect a udp callback to have a status.
+    assert(call->event == msg_error || status);
+    if (status) conn->conn_context = status->conn_context;
+  }
+
+  conn->callback(conn, call->event, call->data);
+
+  // Save the user's conn_context in case they changed it.
+  if (conn->protocol_type == msg_udp) {
+    ConnStatus *status = status_of_conn(conn);
+    if (status) status->conn_context = conn->conn_context;
+  }
+
+  if (call->data.bytes) msg_delete_data(call->data);
+  if (call->to_free) dbgcheck__free(call->to_free, call->set_name);
+}
+
 // Returns no_error (NULL) on success, and sets the protocol_type,
 // remote_ip, and remote_port of the given conn.
 // Returns an error string if there was an error.
@@ -898,22 +937,25 @@ static int read_header(int sock, msg_Conn *conn, Header *header) {
   return true;
 }
 
+// This creates a new ConnStatus struct if none exists for the remote address.
 static ConnStatus *remote_address_seen(msg_Conn *conn) {
-  Address *address = address_of_conn(conn);
-  map__key_value *pair;
-  ConnStatus *status;
-  if ((pair = map__find(conn_status, address))) {
-    // TODO Update the timing data for this remote address.
-    status = (ConnStatus *)pair->value;
-  } else {
-    // It's a new remote address; conn_status takes ownership of address.
-    status = new_conn_status(0.0 /* TODO set to now */);
-    address = dbgcheck__malloc(sizeof(Address), "Address");
+
+  ConnStatus *status = status_of_conn(conn);
+
+  if (status == NULL) {
+    // It's a new remote address; set up a new owned Address.
+    status = new_conn_status(0.0);  // TODO set to now.
+
+    status->conn_context = conn->conn_context;
+
+    Address *address = dbgcheck__malloc(sizeof(Address), "Address");
     *address = *address_of_conn(conn);
 
     map__set(conn_status, address, status);
     send_callback(conn, msg_connection_ready, msg_no_data, free_nothing, no_set_name);
   }
+
+  // TODO Update the timing data for this remote address.
 
   return status;
 }
@@ -950,6 +992,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
   }
   ConnStatus *status = NULL;
   Header *header = NULL;
+  Metadata *metadata = NULL;
   msg_Data data;
 
   // Read in any tcp data.
@@ -1084,15 +1127,21 @@ static int read_from_socket(int sock, msg_Conn *conn) {
       return false;
     }
 
-    // Save the current conn_context if appropriate.
+    // Save the current conn_context if appropriate. We manage a listening udp
+    // listening udp connection's conn_context for the user; we want to try as
+    // hard as possible to let them change conn_context when they want to, and
+    // still preserve its value in the corresponding ConnStatus.
     ConnStatus *old_status = status_of_conn(conn);
     if (old_status) { old_status->conn_context = conn->conn_context; }
 
-    // Set up the conn with current remote address and conn context.
+    // Save this data's status with the data itself, since this is udp.
     conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
     conn->remote_port = ntohs(remote_sockaddr.sin_port);
     status = remote_address_seen(conn);
-    conn->conn_context = status->conn_context;
+
+    metadata = (Metadata *)(data.bytes - metadata_len);
+    metadata->reply_context = NULL;  // reply_context is set for replies below.
+    metadata->remote_address = *address_of_conn(conn);
   }
 
   // Look up a reply_context if it's a reply.
@@ -1100,11 +1149,16 @@ static int read_from_socket(int sock, msg_Conn *conn) {
     void *reply_id_key = (void *)(intptr_t)header->reply_id;
     map__key_value *pair = map__find(status->reply_contexts, reply_id_key);
     if (pair == NULL) {
-      send_callback_error(conn, "Unrecognized reply_id", data.bytes - header_len, "msg_Data bytes");
+      send_callback_error(
+          conn,
+          "Unrecognized reply_id",
+          data.bytes - metadata_len,  // Pointer to free.
+          "msg_Data bytes");          // Set name for dbgcheck free.
       return false;
     }
     remove_timeout(status, header->reply_id);
     conn->reply_context = pair->value;
+    if (metadata) metadata->reply_context = pair->value;  // The udp case.
     map__unset(status->reply_contexts, reply_id_key);
     // Clear reply_id so a nested msg_send isn't interpreted as a reply itself.
     conn->reply_id = 0;
@@ -1320,10 +1374,7 @@ void msg_runloop(int timeout_in_ms) {
   immediate_callbacks = array__new(16, sizeof(PendingCall));
 
   array__for(PendingCall *, call, saved_immediate_callbacks, i) {
-    call->conn->callback(call->conn, call->event, call->data);
-    if (call->data.bytes) msg_delete_data(call->data);
-
-    if (call->to_free) dbgcheck__free(call->to_free, call->set_name);
+    make_call(call);
   }
 
   // TODO Handle timed callbacks - such as heartbeats - and get timeouts.
@@ -1409,19 +1460,19 @@ msg_Data msg_new_data(const char *str) {
   // Allocate room for the string with +1 for the null terminator.
   size_t data_size = strlen(str) + 1;
   msg_Data data = msg_new_data_space(data_size);
-  dbgcheck__inner_ptr_size(data.bytes, data.bytes - header_len, "msg_Data bytes", data_size);
+  dbgcheck__inner_ptr_size(data.bytes, data.bytes - metadata_len, "msg_Data bytes", data_size);
   strncpy(data.bytes, str, data_size);
   return data;
 }
 
 msg_Data msg_new_data_space(size_t num_bytes) {
-  msg_Data data = {.num_bytes = num_bytes, .bytes = dbgcheck__malloc(num_bytes + header_len, "msg_Data bytes")};
-  data.bytes += header_len;
+  msg_Data data = {.num_bytes = num_bytes, .bytes = dbgcheck__malloc(num_bytes + metadata_len, "msg_Data bytes")};
+  data.bytes += metadata_len;
   return data;
 }
 
 void msg_delete_data(msg_Data data) {
-  dbgcheck__free(data.bytes - header_len, "msg_Data bytes");
+  dbgcheck__free(data.bytes - metadata_len, "msg_Data bytes");
 }
 
 char *msg_ip_str(msg_Conn *conn) {
