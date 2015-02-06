@@ -11,9 +11,13 @@
 // receiving a message, unlike the tcp behavior.
 //
 // This test works as follows:
-//  * two clients and server both start
-//  * server sleeps briefly so the clients can send several messages
-//  * the server runs one loop and expects to get a message from each client.
+//  * 1. startup - 2 clients (C), 1 server (S)
+//  * 2. C: send one message each; S: sleep
+//  * 3. S: expect one message from each client, setting conn_context,
+//          checking remote addresses, changes remote address; C: sleep
+//  * 4. C: send one message each; S: sleep
+//  * 5. S: expect one message from each client,
+//          checking conn_context; C: sleep or exit
 //
 // Virtually all the time, if msgbox is working correctly and can receive
 // multiple messages from the same socket in a single cycle, all the messages
@@ -76,16 +80,18 @@ int max_tries = 24;
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// basic server
+// server
 
 int server_done;
 int server_event_num;
 int num_msg_recd;
 Context server_ctx;
 
+int server_round_one_received = false;
+
 void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
-  test_printf("Server: Received event %s\n", event_names[event]);
+  test_printf("<pid %d> Server: Received event %s\n", getpid(), event_names[event]);
 
   if (event == msg_error) {
     char *err_str = msg_as_str(data);
@@ -103,23 +109,69 @@ void server_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     }
   }
 
+  if (event == msg_connection_ready) {
+    // Prevent leak-through of a previously-set conn_context.
+    // The purpose of this is to encourage the test to fail if the conn_context
+    // is not being saved/restored as expected.
+    conn->conn_context = NULL;
+  }
+
   if (event == msg_message) {
     char *str = msg_as_str(data);
     test_str_eq(str, "why hello");
 
-    static char first_address[64] = "";
+    static char address1[64] = "";
+    static char address2[64] = "";
 
-    if (strcmp(first_address, "") == 0) {
-      // First message.
-      strcpy(first_address, msg_address_str(conn));
+    static int addr1_seen = false;
+    static int addr2_seen = false;
+
+    static uint32_t other_ip;
+    static uint16_t other_port;
+
+    if (!server_round_one_received) {
+
+      // Handle round one; one message from each client.
+
+      if (strcmp(address1, "") == 0) {
+        // First message.
+        strcpy(address1, msg_address_str(conn));
+        conn->conn_context = address1;
+
+        other_ip   = conn->remote_ip;
+        other_port = conn->remote_port;
+
+      } else if (strcmp(address2, "") == 0) {
+        // Second message.
+        strcpy(address2, msg_address_str(conn));
+        conn->conn_context = address2;
+
+        conn->remote_ip   = other_ip;
+        conn->remote_port = other_port;
+
+        test_that(strcmp(address1, address2) != 0);
+        server_round_one_received = true;
+      }
+
     } else {
-      // Second message.
-      char *second_address = msg_address_str(conn);
-      test_that(strcmp(first_address, second_address) != 0);
+
+      // Handle round two: another message from each client.
+
+      if (!addr1_seen && conn->conn_context == address1) {
+        addr1_seen = true;
+      } else if (!addr2_seen && conn->conn_context == address2) {
+        addr2_seen = true;
+      } else {
+        test_failed("Saw unexpected conn_context (%p); "
+            "expected either address1 (%p) or address2 (%p); each once.\n",
+            conn->conn_context, address1, address2);
+      }
     }
 
-    server_done = true;
     num_msg_recd++;
+    if (num_msg_recd == 4) {
+      server_done = true;
+    }
   }
 
   server_event_num++;
@@ -142,13 +194,10 @@ int server() {
   usleep(1000);
 
   int timeout_in_ms = 10;
-  msg_runloop(timeout_in_ms);  // May just get a msg_listening event. (Why?)
-  // TODO Figure out why the above call doesn't get everything all at once.
-  if (!server_done) msg_runloop(timeout_in_ms);
+  while (!server_done) msg_runloop(timeout_in_ms);
 
-  test_that(server_done);
   // TODO Occasionally the next check fails. Understand why and update things accordingly.
-  test_that(num_msg_recd == 2);
+  test_that(num_msg_recd == 4);
 
   free(server_ctx.address);
 
@@ -160,10 +209,12 @@ int server() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// basic client
+// client
 
 int client_done;
 int client_event_num;
+int client_round_one_sent = false;
+msg_Conn *client_to_server_conn = NULL;
 
 void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
@@ -173,7 +224,7 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
 
   Context *ctx = (Context *)conn->conn_context;
 
-  test_printf("Client: Received event %s\n", event_names[event]);
+  test_printf("<pid %d> Client: Received event %s\n", getpid(), event_names[event]);
 
   if (event == msg_error) {
     char *err_str = msg_as_str(data);
@@ -200,7 +251,9 @@ void client_update(msg_Conn *conn, msg_Event event, msg_Data data) {
     msg_Data data = msg_new_data("why hello");
     msg_send(conn, data);
     msg_delete_data(data);
-    client_done = true;
+
+    client_to_server_conn = conn;
+    client_round_one_sent = true;
   }
 
   client_event_num++;
@@ -225,10 +278,23 @@ int client(pid_t server_pid) {
   while (!client_done) {
     msg_runloop(timeout_in_ms);
 
+    if (client_round_one_sent) {
+
+      // Make sure the server sees all round one messages
+      // before we move on to phase two of our master plan.
+      usleep(5000);
+
+      msg_Data data = msg_new_data("why hello");
+      msg_send(client_to_server_conn, data);
+      msg_delete_data(data);
+
+      client_done = true;
+    }
+
     // Check to see if the server process ended before we expected it to.
     int status;
     if (!client_done && waitpid(server_pid, &status, WNOHANG)) {
-      test_failed("Client: Server process ended before client expected.");
+      test_failed("<pid %d> Client: Server process ended before client expected.", getpid());
     }
   }
 
@@ -256,13 +322,13 @@ pid_t fork_a_client(pid_t server_pid) {
 int many_udp_cli_one_server_loop_test() {
 
   pid_t server_pid = getpid();
-  test_printf("Server: pid=%d\n", server_pid);
+  test_printf("<pid %d> Server: pid=%d\n", server_pid, server_pid);
 
   pid_t cli1_pid = fork_a_client(server_pid);
   pid_t cli2_pid = fork_a_client(server_pid);
 
   if (cli1_pid == -1 || cli2_pid == -1) {
-    test_failed("Server: one of the client fork calls failed.");
+    test_failed("<pid %d> Server: one of the client fork calls failed.", server_pid);
   }
 
   // The clients will be briefly paused now so we can start the server.

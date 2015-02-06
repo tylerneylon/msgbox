@@ -739,27 +739,46 @@ static void send_callback_os_error(msg_Conn *conn, const char *msg, void *to_fre
 }
 
 static void make_call(PendingCall *call) {
-  msg_Conn *conn = call->conn;
+  msg_Conn *   conn   = call->conn;
+  ConnStatus * status = NULL;  // We'll set this if needed in the udp case.
+
+  char *addr_str = "<uninitialized address>";
 
   // Copy metadata from msg_Data/status to msg_Conn for udp messages.
-  if (conn->protocol_type == msg_udp && call->data.num_bytes > 0) {
+  if (conn->protocol_type == msg_udp && call->data.bytes) {
     msg_Data data          = call->data;
     Metadata *metadata     = (Metadata *)(data.bytes - metadata_len);
     conn->reply_context    = metadata->reply_context;
     *address_of_conn(conn) = metadata->remote_address;
-    ConnStatus *status     = status_of_conn(conn);
+    status                 = status_of_conn(conn);
+
+    if (verbosity >= 3) {
+      addr_str = address_as_str(&metadata->remote_address);
+    }
 
     // Unless this is a msg_error, we expect a udp callback to have a status.
     assert(call->event == msg_error || status);
-    if (status) conn->conn_context = status->conn_context;
+    if (status) {
+      if (verbosity >= 3) {
+        printf("<pid %d> restoring conn_context=%p for address %s (status=%p)\n",
+            getpid(), status->conn_context, addr_str, status);
+      }
+      conn->conn_context = status->conn_context;
+    } else if (verbosity >= 3) {
+      printf("<pid %d> no status to restore conn_context from; address=%s\n",
+          getpid(), addr_str);
+    }
   }
 
   conn->callback(conn, call->event, call->data);
 
   // Save the user's conn_context in case they changed it.
-  if (conn->protocol_type == msg_udp) {
-    ConnStatus *status = status_of_conn(conn);
-    if (status) status->conn_context = conn->conn_context;
+  if (conn->protocol_type == msg_udp && status) {
+    status->conn_context = conn->conn_context;
+    if (verbosity >= 3) {
+      printf("<pid %d> saving conn_context=%p for address %s (status=%p)\n",
+          getpid(), conn->conn_context, addr_str, status);
+    }
   }
 
   if (call->data.bytes) msg_delete_data(call->data);
@@ -952,7 +971,13 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
     *address = *address_of_conn(conn);
 
     map__set(conn_status, address, status);
-    send_callback(conn, msg_connection_ready, msg_no_data, free_nothing, no_set_name);
+
+    // Send in the correct remote address with the callback.
+    msg_Data data = msg_new_data_space(0);
+    Metadata *metadata = (Metadata *)(data.bytes - metadata_len);
+    metadata->remote_address = *address;
+
+    send_callback(conn, msg_connection_ready, data, free_nothing, no_set_name);
   }
 
   // TODO Update the timing data for this remote address.
@@ -1127,12 +1152,12 @@ static int read_from_socket(int sock, msg_Conn *conn) {
       return false;
     }
 
-    // Save the current conn_context if appropriate. We manage a listening udp
-    // listening udp connection's conn_context for the user; we want to try as
-    // hard as possible to let them change conn_context when they want to, and
-    // still preserve its value in the corresponding ConnStatus.
-    ConnStatus *old_status = status_of_conn(conn);
-    if (old_status) { old_status->conn_context = conn->conn_context; }
+    // We don't save the current conn_context because the user may have
+    // reasonably changed the remote address without changing the conn_context
+    // in order to send a message from the same socket - specifically, this is
+    // tricky for a listening udp socket. So we don't know at this point that
+    // conn_context is correctly associated with the conn's current remote
+    // address.
 
     // Save this data's status with the data itself, since this is udp.
     conn->remote_ip = remote_sockaddr.sin_addr.s_addr;
