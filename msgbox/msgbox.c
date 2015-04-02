@@ -527,17 +527,19 @@ typedef struct {
   Map      reply_contexts;  // Map reply_id -> reply_context.
   void *   conn_context;    // Useful for listening udp conns.
   uint16_t next_reply_id;
+  Address  remote_address;
 
   // These overlap; waiting_buffer is a suffix of total_buffer.
   msg_Data total_buffer;
   msg_Data waiting_buffer;
 } ConnStatus;
 
-ConnStatus *new_conn_status(double now) {
-  ConnStatus *status = dbgcheck__calloc(sizeof(ConnStatus), "ConnStatus");
-  status->last_seen_at = now;
+ConnStatus *new_conn_status(double now, Address *address) {
+  ConnStatus *status     = dbgcheck__calloc(sizeof(ConnStatus), "ConnStatus");
+  status->last_seen_at   = now;
   status->reply_contexts = map__new(reply_id_hash, reply_id_eq);
-  status->next_reply_id = 1;
+  status->next_reply_id  = 1;
+  status->remote_address = *address;
   return status;
 }
 
@@ -963,7 +965,7 @@ static ConnStatus *remote_address_seen(msg_Conn *conn) {
 
   if (status == NULL) {
     // It's a new remote address; set up a new owned Address.
-    status = new_conn_status(0.0);  // TODO set to now.
+    status = new_conn_status(0.0, address_of_conn(conn));  // TODO set to now.
 
     status->conn_context = conn->conn_context;
 
@@ -1390,7 +1392,14 @@ void msg_runloop(int timeout_in_ms) {
     array__remove_item(timeouts, timeout);
     i--;  // Back up one item so the next iteration gets the next item.
     const char *msg = (conn->protocol_type == msg_tcp ? "tcp get timed out" : "udp get timed out");
-    send_callback_error(conn, msg, free_nothing, no_set_name);
+    
+    // Set up metadata as it overrides data in conn within make_call.
+    msg_Data data = msg_new_data(msg);
+    Metadata *metadata = (Metadata *)(data.bytes - metadata_len);
+    metadata->reply_context  = conn->reply_context;
+    metadata->remote_address = timeout->status->remote_address;
+
+    send_callback(conn, msg_error, data, free_nothing, no_set_name);
   }
 
   // Save the state of pending callbacks so that users can add new callbacks
