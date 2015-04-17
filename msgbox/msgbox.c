@@ -571,7 +571,7 @@ static Map conn_status = NULL;
 // Returns NULL if the given remote address has no associated status.
 ConnStatus *status_of_conn(msg_Conn *conn) {
   Address *address = (Address *)(&conn->remote_ip);
-  map__key_value *pair = map__find(conn_status, address);
+  map__key_value *pair = map__get(conn_status, address);
   return pair ? (ConnStatus *)pair->value : NULL;
 }
 
@@ -1174,7 +1174,7 @@ static int read_from_socket(int sock, msg_Conn *conn) {
   // Look up a reply_context if it's a reply.
   if (header->message_type == msg_type_reply) {
     void *reply_id_key = (void *)(intptr_t)header->reply_id;
-    map__key_value *pair = map__find(status->reply_contexts, reply_id_key);
+    map__key_value *pair = map__get(status->reply_contexts, reply_id_key);
     if (pair == NULL) {
       send_callback_error(
           conn,
@@ -1384,7 +1384,7 @@ void msg_runloop(int timeout_in_ms) {
 
     // Remove the pending status information and inform the user of the timeout.
     void *reply_id_key = (void *)(intptr_t)timeout->reply_id;
-    map__key_value *pair = map__find(timeout->status->reply_contexts, reply_id_key);
+    map__key_value *pair = map__get(timeout->status->reply_contexts, reply_id_key);
     assert(pair);  // Since we set up the timeout ourselves, it should exist in the status.
     msg_Conn *conn = timeout->conn;  // Save conn as timeout will soon be freed.
     conn->reply_context = pair->value;
