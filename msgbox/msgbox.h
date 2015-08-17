@@ -22,8 +22,9 @@
 
 // Type definitions.
 
-// Allocate and deallocate msg_Data using the msg_{new,delete}_data* functions below.
-// That's needed since bytes points *into* a buffer with preamble space for headers.
+// Allocate and deallocate msg_Data using the msg_{new,delete}_data*
+// functions below. That's needed since bytes points *into* a buffer with
+// preamble space for headers.
 typedef struct {
   size_t num_bytes;
   char *bytes;
@@ -67,12 +68,14 @@ void msg_runloop(int timeout_in_ms);
 // Calls to start or stop a client or server.
 
 void msg_listen (const char *address, msg_Callback callback);
-void msg_connect(const char *address, msg_Callback callback, void *conn_context);
+void msg_connect(const char *address, msg_Callback callback,
+                 void *conn_context);
 
 void msg_unlisten  (msg_Conn *conn);
 void msg_disconnect(msg_Conn *conn);
 
-// Calls to send a message. Call msg_get when you expect a reply; otherwise call msg_send.
+// Calls to send a message.
+// Call msg_get when you expect a reply; otherwise call msg_send.
 
 void msg_send(msg_Conn *conn, msg_Data data);
 void msg_get (msg_Conn *conn, msg_Data data, void *reply_context);
