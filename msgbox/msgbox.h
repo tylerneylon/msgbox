@@ -14,8 +14,7 @@
 // See the examples directory for basic usage examples.
 //
 
-#ifndef __MSG_MSGBOX_H__
-#define __MSG_MSGBOX_H__
+#pragma once
 
 #include <inttypes.h>
 #include <sys/types.h>
@@ -103,5 +102,3 @@ extern void *msg_no_context;
 // Valid values for msg_Conn.protocol_type.
 extern const int msg_udp;
 extern const int msg_tcp;
-
-#endif // __MSG_MSGBOX_H__
